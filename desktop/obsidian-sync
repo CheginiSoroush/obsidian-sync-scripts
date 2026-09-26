@@ -1,0 +1,176 @@
+#!/bin/bash
+
+# ═══════════════════════════════════════════
+# اسکریپت Sync Obsidian برای کامپیوتر
+# ═══════════════════════════════════════════
+
+VAULT_PATH="/media/sss/shared/obsidian"
+BRANCH="main"
+REMOTE="origin"
+
+# رنگ‌ها برای نمایش بهتر
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# ═══════════════════════════════════════════
+# توابع کمکی
+# ═══════════════════════════════════════════
+
+show_help() {
+    echo -e "${BLUE}📖 راهنمای obsidian-sync:${NC}"
+    echo ""
+    echo "  obsidian-sync          - Sync کامل (Pull + Push)"
+    echo "  obsidian-sync pull     - فقط دریافت از GitHub"
+    echo "  obsidian-sync push     - فقط ارسال به GitHub"
+    echo "  obsidian-sync status   - نمایش وضعیت"
+    echo "  obsidian-sync info     - اطلاعات Vault"
+    echo "  obsidian-sync backup   - بکاپ فوری"
+    echo "  obsidian-sync help     - نمایش این راهنما"
+    echo ""
+    echo -e "${YELLOW}مثال:${NC}"
+    echo "  obsidian-sync          # Sync کامل"
+    echo "  obsidian-sync backup   # بکاپ فوری"
+}
+
+check_vault() {
+    if [ ! -d "$VAULT_PATH" ]; then
+        echo -e "${RED}❌ Vault پیدا نشد: $VAULT_PATH${NC}"
+        echo "محتویات پوشه مشترک:"
+        ls /media/sss/shared/
+        exit 1
+    fi
+    
+    # بررسی Git
+    if [ ! -d "$VAULT_PATH/.git" ]; then
+        echo -e "${YELLOW}🔄 راه‌اندازی Git اولیه...${NC}"
+        cd "$VAULT_PATH"
+        git init
+        git remote add origin https://github.com/CheginiSoroush/obsidian.git
+        git fetch origin
+        git checkout -b main
+        git branch --set-upstream-to=origin/main main
+    fi
+}
+
+safe_pull() {
+    cd "$VAULT_PATH"
+    
+    # ذخیره تغییرات local
+    if [ -n "$(git status --porcelain)" ]; then
+        echo -e "${YELLOW}📝 ذخیره تغییرات local...${NC}"
+        git add .
+        git commit -m "💾 Auto-save: $(date)"
+    fi
+    
+    # Pull با Rebase
+    echo -e "${BLUE}📥 Pull از GitHub...${NC}"
+    if git pull --rebase origin $BRANCH; then
+        echo -e "${GREEN}✅ Pull موفقیت‌آمیز بود${NC}"
+    else
+        echo -e "${RED}❌ Conflict رخ داد!${NC}"
+        echo -e "${YELLOW}برای حل: obsidian-sync push${NC}"
+        return 1
+    fi
+}
+
+safe_push() {
+    cd "$VAULT_PATH"
+    
+    # Commit اگر تغییرات هست
+    if [ -n "$(git status --porcelain)" ]; then
+        echo -e "${YELLOW}📝 Commit تغییرات...${NC}"
+        git add .
+        git commit -m "💻 Desktop sync: $(date)"
+    fi
+    
+    # Push
+    echo -e "${BLUE}📤 Push به GitHub...${NC}"
+    if git push origin $BRANCH; then
+        echo -e "${GREEN}✅ Push موفقیت‌آمیز بود${NC}"
+    else
+        echo -e "${RED}❌ Push ناموفق!${NC}"
+        echo -e "${YELLOW}برای رفع: obsidian-sync pull${NC}"
+        return 1
+    fi
+}
+
+show_status() {
+    cd "$VAULT_PATH"
+    echo -e "${BLUE}📊 وضعیت Vault:${NC}"
+    echo "مسیر: $VAULT_PATH"
+    echo "Branch: $(git branch --show-current)"
+    echo "فایل‌های تغییر کرده: $(git status --porcelain | wc -l)"
+    echo "Commitهای local: $(git log origin/main..HEAD --oneline 2>/dev/null | wc -l)"
+    echo "Commitهای remote: $(git log HEAD..origin/main --oneline 2>/dev/null | wc -l)"
+    echo "آخرین Commit: $(git log -1 --oneline)"
+}
+
+backup_now() {
+    echo -e "${BLUE}💾 بکاپ فوری...${NC}"
+    DATE=$(date +%Y%m%d_%H%M%S)
+    BACKUP_FILE="/home/sss/obsidian-backups/desktop-backup-$DATE.tar.gz"
+    
+    mkdir -p /home/sss/obsidian-backups
+    tar -czf "$BACKUP_FILE" -C "$VAULT_PATH" .
+    
+    echo -e "${GREEN}✅ بکاپ انجام شد: $BACKUP_FILE${NC}"
+    
+    # حذف بکاپ‌های قدیمی‌تر از ۷ روز
+    find /home/sss/obsidian-backups -name "*.tar.gz" -mtime +7 -delete
+    echo -e "${GREEN}🗑️ بکاپ‌های قدیمی پاک شدند${NC}"
+}
+
+# ═══════════════════════════════════════════
+# اجرای اصلی
+# ═══════════════════════════════════════════
+
+main() {
+    local command="${1:-sync}"
+    
+    # بررسی Vault (برای همه دستورات به‌جز help)
+    if [ "$command" != "help" ]; then
+        check_vault
+    fi
+    
+    case "$command" in
+        sync|"")
+            safe_pull
+            if [ $? -eq 0 ]; then
+                safe_push
+            fi
+            ;;
+        pull)
+            safe_pull
+            ;;
+        push)
+            safe_push
+            ;;
+        status)
+            show_status
+            ;;
+        backup)
+            backup_now
+            ;;
+        info)
+            echo -e "${BLUE}📁 اطلاعات Vault:${NC}"
+            echo "مسیر: $VAULT_PATH"
+            echo "تعداد فایل‌ها: $(find "$VAULT_PATH" -name "*.md" | wc -l)"
+            echo "حجم: $(du -sh "$VAULT_PATH" | cut -f1)"
+            echo "Remote: $(git remote get-url origin)"
+            ;;
+        help|--help|-h)
+            show_help
+            ;;
+        *)
+            echo -e "${RED}❌ دستور ناشناخته: $command${NC}"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# اجرای اسکریپت
+main "$@"
