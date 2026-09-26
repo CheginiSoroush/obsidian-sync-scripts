@@ -1,0 +1,25 @@
+# فایل‌های موقت
+*.tmp
+*.bak
+*~
+.DS_Store
+
+# فایل‌های حساس
+.env
+*.token
+*.key
+
+# پوشه‌های سیستم
+__pycache__/
+*.pyc
+node_modules/
+
+# فایل‌های Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# فایل‌های بکاپ
+*.tar.gz
+*.zip
