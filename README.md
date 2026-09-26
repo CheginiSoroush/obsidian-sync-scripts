@@ -1,529 +1,302 @@
+# 🔄 Obsidian Sync Scripts
 
-cd ~/obsidian-sync-scripts
+<div align="center">
 
-# ═══════════════════════════════════════════
-# ۱. ساخت LICENSE
-# ═══════════════════════════════════════════
+![Obsidian Sync](https://img.shields.io/badge/Obsidian-Sync-blue?style=for-the-badge&logo=obsidian)
+![Platform](https://img.shields.io/badge/Platform-Desktop%20%7C%20Mobile-green?style=for-the-badge&logo=android)
+![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-1.0.0-orange?style=for-the-badge)
 
-cat > LICENSE << 'EOF'
-MIT License
+**اسکریپت‌های همگام‌سازی Obsidian با Git برای کامپیوتر و موبایل**
 
-Copyright (c) 2026 CheginiSoroush
+[نصب کامپیوتر](#-نصب-اسکریپت-کامپیوتر) • [نصب موبایل](#-نصب-اسکریپت-موبایل) • [راهنمای استفاده](#-راهنمای-استفاده)
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+</div>
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+---
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-EOF
+## 📖 فهرست مطالب
 
-# ═══════════════════════════════════════════
-# ۲. ساخت .gitignore
-# ═══════════════════════════════════════════
+- [معرفی پروژه](#-معرفی-پروژه)
+- [ویژگی‌ها](#-ویژگی‌ها)
+- [معماری سیستم](#%EF%B8%8F-معماری-سیستم)
+- [پیش‌نیازها](#-پیش-نیازها)
+- [نصب اسکریپت کامپیوتر](#-نصب-اسکریپت-کامپیوتر)
+- [نصب اسکریپت موبایل](#-نصب-اسکریپت-موبایل)
+- [راهنمای استفاده](#-راهنمای-استفاده)
+- [Workflow روزانه](#-workflow-روزانه)
+- [عیب‌یابی](#-عیب-یابی)
+- [سوالات متداول](#-سوالات-متداول)
+- [مجوز](#-مجوز)
 
-cat > .gitignore << 'EOF'
-# فایل‌های موقت
-*.tmp
-*.bak
-*~
-.DS_Store
+---
 
-# فایل‌های حساس
-.env
-*.token
-*.key
+## 🎯 معرفی پروژه
 
-# پوشه‌های سیستم
-__pycache__/
-*.pyc
-node_modules/
+این پروژه شامل دو اسکریپت Bash قدرتمند برای همگام‌سازی یادداشت‌های **Obsidian** با استفاده از **Git** و **GitHub** است.
 
-# فایل‌های Editor
-.vscode/
-.idea/
-*.swp
-*.swo
+### چرا این اسکریپت‌ها؟
 
-# فایل‌های بکاپ
-*.tar.gz
-*.zip
-EOF
+| ویژگی | توضیح |
+|--------|--------|
+| 🆓 **رایگان** | بدون نیاز به سرویس پولی |
+| 🔒 **امن** | استفاده از SSH و Git |
+| 🎮 **کنترل کامل** | بدون conflict خودکار |
+| 🚀 **سریع** | یک دستور برای همه کارها |
+| 💾 **بکاپ** | بکاپ خودکار قابل بازیابی |
+| 📱 **چندسکویی** | Desktop و Mobile |
 
-# ═══════════════════════════════════════════
-# ۳. ساخت CONTRIBUTING.md
-# ═══════════════════════════════════════════
+---
 
-cat > CONTRIBUTING.md << 'EOF'
-# 🤝 راهنمای مشارکت
+## ✨ ویژگی‌ها
 
-ممنون که می‌خواهید کمک کنید!
+### 💻 اسکریپت کامپیوتر (`obsidian-sync`)
 
-## نحوه مشارکت
-
-1. **Fork** کنید
-2. **Branch** جدید بسازید:
-   ```bash
-   git checkout -b feature/amazing-feature
-   ```
-3. **تغییرات** را اعمال کنید
-4. **Commit** کنید:
-   ```bash
-   git commit -m 'Add amazing feature'
-   ```
-5. **Push** کنید:
-   ```bash
-   git push origin feature/amazing-feature
-   ```
-6. **Pull Request** بفرستید
-
-## استانداردها
-
-- کد را تمیز بنویسید
-- کامنت‌گذاری کنید
-- تست کنید
-- مستندات را به‌روز کنید
-- از ShellCheck استفاده کنید
-
-## ساختار Commit
-
-```
-type(scope): description
-
-[optional body]
-
-[optional footer]
+```bash
+obsidian-sync          # Sync کامل (Pull + Push)
+obsidian-sync pull     # دریافت از GitHub
+obsidian-sync push     # ارسال به GitHub
+obsidian-sync status   # نمایش وضعیت
+obsidian-sync info     # اطلاعات Vault
+obsidian-sync backup   # بکاپ فوری
+obsidian-sync help     # راهنما
 ```
 
-### Types:
-- `feat`: ویژگی جدید
-- `fix`: رفع باگ
-- `docs`: مستندات
-- `style`: فرمت‌بندی
-- `refactor`: بازنویسی
-- `test`: تست
-- `chore`: کارهای جانبی
+### 📱 اسکریپت موبایل (`ob-sync`)
 
-### مثال:
-```
-feat(desktop): add backup command
-fix(mobile): resolve conflict issue
-docs(readme): update installation guide
+```bash
+ob-sync          # Sync کامل
+ob-sync pull     # دریافت از GitHub
+ob-sync push     # ارسال به GitHub
+ob-sync status   # وضعیت
+ob-sync help     # راهنما
 ```
 
-## ساختار پروژه
+---
+
+## 🏗️ معماری سیستم
 
 ```
-obsidian-sync-scripts/
-├── desktop/
-│   └── obsidian-sync    # اسکریپت کامپیوتر
-├── mobile/
-│   └── ob-sync          # اسکریپت موبایل
-├── docs/                # مستندات اضافی
-├── .gitignore
-├── CONTRIBUTING.md
-├── LICENSE
-└── README.md
+┌─────────────────────────────────────────┐
+│         GitHub Repository               │
+│      (YourUsername/obsidian)            │
+└─────────────────┬───────────────────────┘
+                  │
+         HTTPS + SSH
+                  │
+    ┌─────────────┴─────────────┐
+    │                           │
+    ▼                           ▼
+┌──────────┐          ┌──────────┐
+│ کامپیوتر │          │  گوشی    │
+│ (Ubuntu) │          │ (Android)│
+├──────────┤          ├──────────┤
+│ obsidian │          │  ob-sync │
+│  -sync   │          │          │
+└──────────┘          └──────────┘
 ```
-EOF
 
-# ═══════════════════════════════════════════
-# ۴. ساخت فایل نصب خودکار برای کامپیوتر
-# ═══════════════════════════════════════════
+---
 
-cat > desktop/install.sh << 'EOF'
-#!/bin/bash
+## 📋 پیش‌نیازها
 
-echo "🚀 نصب Obsidian Sync برای کامپیوتر..."
+### کامپیوتر:
+- Git (`sudo apt install git`)
+- SSH Key
+- Obsidian
 
-# ۱. دانلود اسکریپت اصلی
-wget -q https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/desktop/obsidian-sync -O ~/obsidian-sync
+### موبایل:
+- Termux (از F-Droid)
+- Git (`pkg install git`)
+- Obsidian Android
 
-# ۲. تنظیم مجوز
+### GitHub:
+- Repository خصوصی برای یادداشت‌ها
+- Personal Access Token (PAT) برای موبایل
+
+---
+
+## 💻 نصب اسکریپت کامپیوتر
+
+### روش ۱: نصب خودکار (توصیه می‌شود)
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/desktop/install.sh)"
+```
+
+### روش ۲: نصب دستی
+
+```bash
+# ۱. دانلود
+wget https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/desktop/obsidian-sync -O ~/obsidian-sync
+
+# ۲. مجوز اجرا
 chmod +x ~/obsidian-sync
 
 # ۳. ایجاد Alias
-if ! grep -q "obsidian-sync" ~/.bashrc; then
-    echo 'alias obsidian-sync="$HOME/obsidian-sync"' >> ~/.bashrc
-fi
-
-# ۴. اعمال تغییرات
+echo 'alias obsidian-sync="$HOME/obsidian-sync"' >> ~/.bashrc
 source ~/.bashrc
-
-# ۵. بررسی
-if [ -f ~/obsidian-sync ]; then
-    echo "✅ نصب موفقیت‌آمیز بود!"
-    echo ""
-    echo "📖 دستورات:"
-    echo "  obsidian-sync          - Sync کامل"
-    echo "  obsidian-sync pull     - فقط Pull"
-    echo "  obsidian-sync push     - فقط Push"
-    echo "  obsidian-sync status   - وضعیت"
-    echo "  obsidian-sync backup   - بکاپ"
-    echo "  obsidian-sync help     - راهنما"
-    echo ""
-    echo "💡 برای شروع: obsidian-sync status"
-else
-    echo "❌ نصب ناموفق!"
-    echo "لطفاً دستی نصب کنید"
-fi
-EOF
-
-chmod +x desktop/install.sh
-
-# ═══════════════════════════════════════════
-# ۵. ساخت فایل نصب خودکار برای موبایل
-# ═══════════════════════════════════════════
-
-cat > mobile/install.sh << 'EOF'
-#!/bin/bash
-
-echo "🚀 نصب Obsidian Sync برای موبایل..."
-
-# ۱. دانلود اسکریپت
-curl -sSL https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/mobile/ob-sync -o ~/ob-sync
-
-# ۲. تنظیم مجوز
-chmod +x ~/ob-sync
-
-# ۳. ایجاد Alias
-if ! grep -q "ob-sync" ~/.bashrc; then
-    echo 'alias ob-sync="$HOME/ob-sync"' >> ~/.bashrc
-fi
-
-# ۴. اعمال تغییرات
-source ~/.bashrc
-
-# ۵. بررسی
-if [ -f ~/ob-sync ]; then
-    echo "✅ نصب موفقیت‌آمیز بود!"
-    echo ""
-    echo "📖 دستورات:"
-    echo "  ob-sync          - Sync کامل"
-    echo "  ob-sync pull     - فقط Pull"
-    echo "  ob-sync push     - فقط Push"
-    echo "  ob-sync status   - وضعیت"
-    echo "  ob-sync help     - راهنما"
-    echo ""
-    echo "💡 برای شروع: ob-sync status"
-else
-    echo "❌ نصب ناموفق!"
-    echo "لطفاً دستی نصب کنید"
-fi
-EOF
-
-chmod +x mobile/install.sh
-
-# ═══════════════════════════════════════════
-# ۶. ساخت docs/TROUBLESHOOTING.md
-# ═══════════════════════════════════════════
-
-cat > docs/TROUBLESHOOTING.md << 'EOF'
-# 🔧 راهنمای عیب‌یابی کامل
-
-## فهرست مشکلات
-
-1. [مشکلات SSH](#مشکلات-ssh)
-2. [مشکلات Git](#مشکلات-git)
-3. [مشکلات Storage](#مشکلات-storage)
-4. [مشکلات Termux](#مشکلات-termux)
-5. [مشکلات Windows](#مشکلات-windows)
-
----
-
-## مشکلات SSH
-
-### Permission denied (publickey)
-
-**علت:** کلید SSH به GitHub اضافه نشده است.
-
-```bash
-# راه‌حل:
-# ۱. بررسی کلید:
-ls ~/.ssh/
-cat ~/.ssh/id_ed25519.pub
-
-# ۲. اضافه کردن به GitHub:
-# GitHub → Settings → SSH and GPG keys → New SSH key
-# Title: Desktop/Mobile
-# Key: محتوای فایل id_ed25519.pub
-
-# ۳. تست:
-ssh -T git@github.com
-```
-
-### Connection closed by port 22
-
-**علت:** فایروال یا ISP پورت 22 را مسدود کرده.
-
-```bash
-# راه‌حل: استفاده از پورت 443
-cat >> ~/.ssh/config << 'EOF'
-Host github.com
-  Hostname ssh.github.com
-  Port 443
-  User git
-EOF
-
-# تست:
-ssh -T git@github.com
 ```
 
 ---
 
-## مشکلات Git
+## 📱 نصب اسکریپت موبایل
 
-### Repository not found
-
-**علت:** Remote URL اشتباه است.
+### گام ۱: راه‌اندازی Termux
 
 ```bash
-# بررسی:
-git remote -v
-
-# اصلاح:
-git remote set-url origin git@github.com:YourUsername/obsidian.git
+pkg update && pkg upgrade -y
+pkg install git openssh -y
+termux-setup-storage
 ```
 
-### Merge conflict
-
-**علت:** تغییرات همزمان در دو دستگاه.
+### گام ۲: نصب اسکریپت
 
 ```bash
-# راه‌حل ۱ (کامپیوتر):
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/mobile/install.sh)"
+```
+
+### گام ۳: تنظیم Git
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "your_email@example.com"
+git config --global --add safe.directory "*"
+```
+
+---
+
+## 📖 راهنمای استفاده
+
+### کامپیوتر:
+
+```bash
+# دریافت تغییرات
 obsidian-sync pull
 
-# راه‌حل ۲ (دستی):
+# ارسال تغییرات
+obsidian-sync push
+
+# Sync کامل
+obsidian-sync
+
+# بکاپ
+obsidian-sync backup
+```
+
+### موبایل:
+
+```bash
+# دریافت تغییرات
+ob-sync pull
+
+# ارسال تغییرات
+ob-sync push
+
+# Sync کامل
+ob-sync
+```
+
+---
+
+## 📅 Workflow روزانه
+
+### ⚠️ قوانین طلایی:
+
+1. **هرگز همزمان** در دو دستگاه ننویسید
+2. **قبل از نوشتن**، Pull کنید
+3. **بعد از نوشتن**، Push کنید
+
+### مثال روزانه:
+
+```
+صبح:
+  کامپیوتر: obsidian-sync pull
+
+روز:
+  در Obsidian بنویسید
+
+شب:
+  کامپیوتر: obsidian-sync push
+```
+
+---
+
+## 🔧 عیب‌یابی
+
+<details>
+<summary><b>مشکل: Permission denied</b></summary>
+
+```bash
+ssh-add ~/.ssh/id_ed25519
+ssh -T git@github.com
+```
+</details>
+
+<details>
+<summary><b>مشکل: Merge conflict</b></summary>
+
+```bash
+obsidian-sync pull
+# اگر حل نشد:
 cd /path/to/vault
 git rebase --abort
 git fetch origin
 git reset --hard origin/main
 ```
+</details>
 
-### Detected dubious ownership
-
-**علت:** مشکل مالکیت فایل‌ها.
+<details>
+<summary><b>مشکل: dubious ownership</b></summary>
 
 ```bash
-# راه‌حل:
 git config --global --add safe.directory "*"
 ```
+</details>
 
-### Index file too small
-
-**علت:** فایل‌های Git خراب شده‌اند.
-
-```bash
-# راه‌حل:
-cd /path/to/vault
-
-# ۱. بکاپ:
-tar -czf ~/vault-backup.tar.gz -C . .
-
-# ۲. بازسازی:
-rm -rf .git
-git init
-git remote add origin https://github.com/YourUsername/obsidian.git
-git fetch origin
-git checkout -b main
-git branch --set-upstream-to=origin/main main
-git pull origin main
-```
-
-### Author identity unknown
-
-**علت:** Git هویت شما را نمی‌شناسد.
-
-```bash
-# راه‌حل:
-git config --global user.name "Your Name"
-git config --global user.email "your_email@example.com"
-```
+### راهنمای کامل: [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
 ---
 
-## مشکلات Storage
+## ❓ سوالات متداول
 
-### درایو مشترک Mount نمی‌شود (Dual Boot)
+<details>
+<summary><b>آیا رایگان است؟</b></summary>
 
-**علت:** تنظیمات fstab ناقص است.
+بله، کاملاً رایگان. فقط GitHub و Git استفاده می‌شود.
+</details>
 
-```bash
-# ۱. بررسی UUID:
-sudo blkid
+<details>
+<summary><b>آیا امن است؟</b></summary>
 
-# ۲. تنظیم fstab:
-sudo nano /etc/fstab
-# اضافه کنید:
-UUID=xxxx-xxxx /media/username/shared ntfs-3g defaults,uid=1000,gid=1000,umask=007 0 0
+بله:
+- Repository خصوصی
+- انتقال با SSH رمزنگاری شده
+- تاریخچه کامل Git
+</details>
 
-# ۳. Mount:
-sudo mount -a
-```
+<details>
+<summary><b>چقدر فضا لازم است؟</b></summary>
 
-### دسترسی به Documents ندارم (Termux)
-
-**علت:** دسترسی حافظه فعال نشده.
-
-```bash
-# راه‌حل:
-termux-setup-storage
-# روی Allow بزنید
-
-# تست:
-ls ~/storage/shared/Documents/
-```
+GitHub خصوصی: ۱ گیگابایت (برای متن کافی است)
+</details>
 
 ---
 
-## مشکلات Termux
+## 🤝 مشارکت
 
-### Package installation failed
-
-```bash
-# راه‌حل:
-pkg update && pkg upgrade -y
-pkg install git openssh -y
-```
-
-### Storage permission denied
-
-```bash
-# ۱. Termux را ببندید
-# ۲. به Settings → Apps → Termux
-# ۳. Permissions → Storage → Allow
-# ۴. Termux را دوباره باز کنید
-# ۵. اجرای:
-termux-setup-storage
-```
-
-### Git commands not working
-
-```bash
-# بررسی نصب:
-which git
-git --version
-
-# اگر نصب نیست:
-pkg install git -y
-
-# تنظیمات:
-git config --global user.name "Your Name"
-git config --global user.email "your_email@example.com"
-git config --global --add safe.directory "*"
-```
+برای مشارکت، [CONTRIBUTING.md](CONTRIBUTING.md) را بخوانید.
 
 ---
 
-## مشکلات Windows
+## 📄 مجوز
 
-### Git Bash slow
-
-```bash
-# راه‌حل:
-git config --global core.preloadindex true
-git config --global core.fscache true
-git config --global gc.auto 256
-```
-
-### Line ending issues
-
-```bash
-# راه‌حل:
-git config --global core.autocrlf true
-```
+این پروژه تحت [مجوز MIT](LICENSE) منتشر شده است.
 
 ---
 
-## بازیابی داده‌ها
+<div align="center">
 
-### بازیابی از Git History
+**ساخته شده با ❤️ برای جامعه Obsidian**
 
-```bash
-# ۱. لیست commits:
-git log --oneline
-
-# ۲. برگشت به commit خاص:
-git checkout <commit-hash> -- .
-
-# ۳. Commit:
-git add .
-git commit -m "Recover from commit"
-```
-
-### بازیابی از بکاپ
-
-```bash
-# ۱. لیست بکاپ‌ها:
-ls -la /home/user/obsidian-backups/
-
-# ۲. بازیابی:
-tar -xzf backup-YYYYMMDD.tar.gz -C /path/to/vault
-```
-
-### بازیابی از Timeshift (کامپیوتر)
-
-```bash
-sudo timeshift --list
-sudo timeshift --restore --snapshot "YYYY-MM-DD_HH-MM-SS"
-```
-EOF
-
-echo ""
-echo "═══════════════════════════════════════════"
-echo "  🎉 همه فایل‌ها ساخته شدند!"
-echo "═══════════════════════════════════════════"
-echo ""
-echo "📊 ساختار نهایی:"
-find . -type f -not -path "./.git/*" | sort
-```
-
----
-
-## 🚀 حالا Commit و Push کنید:
-
-```bash
-# ۱. اضافه کردن همه فایل‌ها:
-git add .
-
-# ۲. Commit:
-git commit -m "feat: add mobile script, comprehensive documentation, and installation scripts
-
-- Add mobile/ob-sync script for Android/Termux
-- Add desktop/install.sh for automatic installation
-- Add mobile/install.sh for automatic installation
-- Add comprehensive README with installation, usage, troubleshooting
-- Add docs/TROUBLESHOOTING.md with detailed solutions
-- Add LICENSE (MIT)
-- Add CONTRIBUTING.md
-- Add .gitignore"
-
-# ۳. Push:
-git push origin main
-
-# ۴. بررسی نهایی:
-echo "═══════════════════════════════════════════"
-echo "  🎉 ریپازیتوری کامل شد!"
-echo "═══════════════════════════════════════════"
-echo ""
-echo "📊 ساختار نهایی:"
-find . -type f -not -path "./.git/*" | sort
-echo ""
-echo "📊 Git Status:"
-git status
-echo ""
-echo "🔗 لینک ریپازیتوری:"
-echo "https://github.com/CheginiSoroush/obsidian-sync-scripts"
-echo ""
-echo "✅ تمام!"
+</div>
