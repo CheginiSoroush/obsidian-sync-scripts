@@ -1,12 +1,12 @@
 <div align="center">
 
-
+```
  ###   #              ####  #   #  #   #   #### 
 #   #  #             #      #   #  ##  #  #     
 #   #  ####    ###    ####   # #   # # #  #     
 #   #  #   #             #    #    #  ##  #     
  ###   ####           ####    #    #   #   #### 
-
+```
 
 ### ⚡ Enterprise-grade Obsidian ↔ GitHub sync — from your phone, your laptop, your anything.
 
@@ -26,26 +26,21 @@
 
 ## 📖 Table of Contents
 
-- [#  #             #      #   #  ##  #](#----------------------------)
-- [#  ####    ###    ####   # #   # # #](#-------------------)
-- [#  #   #             #    #    #  ##](#-----------------------------1)
-    - [####           ####    #    #   #](#----------------------)
-    - [⚡ Enterprise-grade Obsidian ↔ GitHub sync — from your phone, your laptop, your anything.](#-enterprise-grade-obsidian--github-sync--from-your-phone-your-laptop-your-anything)
-  - [📖 Table of Contents](#-table-of-contents)
-  - [🔥 The Problem](#-the-problem)
-  - [🚀 Quick Start](#-quick-start)
-    - [📱 Android (Termux)](#-android-termux)
-    - [🖥️ Linux / macOS](#️-linux--macos)
-  - [📱 The Interactive Menu](#-the-interactive-menu)
-  - [⌨️ Command Reference](#️-command-reference)
-  - [🧠 How It Works](#-how-it-works)
-  - [🛡️ The 9 Layers of Defense](#️-the-9-layers-of-defense)
-  - [⚙️ Configuration](#️-configuration)
-  - [🚑 Disaster Recovery Playbook](#-disaster-recovery-playbook)
-  - [🤖 Automation](#-automation)
-  - [🗂️ Repository Structure](#️-repository-structure)
-  - [❓ FAQ](#-faq)
-  - [🤝 Contributing · 📜 License](#-contributing---license)
+- [📖 Table of Contents](#-table-of-contents)
+- [🔥 The Problem](#-the-problem)
+- [🚀 Quick Start](#-quick-start)
+  - [📱 Android (Termux)](#-android-termux)
+  - [🖥️ Linux / macOS](#️-linux--macos)
+- [📱 The Interactive Menu](#-the-interactive-menu)
+- [⌨️ Command Reference](#️-command-reference)
+- [🧠 How It Works](#-how-it-works)
+- [🛡️ The 9 Layers of Defense](#️-the-9-layers-of-defense)
+- [⚙️ Configuration](#️-configuration)
+- [🚑 Disaster Recovery Playbook](#-disaster-recovery-playbook)
+- [🤖 Automation](#-automation)
+- [🗂️ Repository Structure](#️-repository-structure)
+- [❓ FAQ](#-faq)
+- [🤝 Contributing · 📜 License](#-contributing---license)
 
 ---
 
