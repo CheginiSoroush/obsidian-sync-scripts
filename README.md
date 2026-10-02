@@ -7,6 +7,7 @@
 ╚██████╔╝███████║██║  ██║███████║   ██║   ██║ ╚████║╚██████╗
  ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝
 '''
+
 ### ⚡ Enterprise-grade Obsidian ↔ GitHub sync — from your phone, your laptop, your anything.
 
 **One script. Three platforms. Zero extra dependencies. Nine layers of defense.**
