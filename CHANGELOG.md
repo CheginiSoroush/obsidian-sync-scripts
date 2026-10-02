@@ -28,6 +28,7 @@ and versioning follows [Semantic Versioning](https://semver.org/).
   `sha256sum` and `xargs -r` with portable equivalents.
 - CI: ShellCheck pinned to v0.11.0; `hr` now receives explicit arguments (SC2120).
 - README: Quick Start block restored after a mis-aimed automated replacement.
+- README: banner restored inside a proper code fence (the original misalignment came from missing fences, not fonts), then redesigned as an OB-SYNC wordmark in a centered pre block; live CI status badge, restored badge links, trimmed banner rows.
 
 ## [7.3.0] — Hardening pass
 
