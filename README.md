@@ -6,7 +6,7 @@
 ██║   ██║╚════██║██╔══██╗╚════██║  ╚██╔╝  ██║╚██╗██║██║
 ╚██████╔╝███████║██║  ██║███████║   ██║   ██║ ╚████║╚██████╗
  ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝
-
+'''
 ### ⚡ Enterprise-grade Obsidian ↔ GitHub sync — from your phone, your laptop, your anything.
 
 **One script. Three platforms. Zero extra dependencies. Nine layers of defense.**
@@ -25,7 +25,7 @@
 
 ## 📖 Table of Contents
 
-- [� Table of Contents](#-table-of-contents)
+- [📖 Table of Contents](#-table-of-contents)
 - [🔥 The Problem](#-the-problem)
 - [🚀 Quick Start](#-quick-start)
   - [📱 Android (Termux)](#-android-termux)
