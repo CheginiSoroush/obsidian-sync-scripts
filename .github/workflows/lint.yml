@@ -38,3 +38,17 @@ jobs:
             bin/ob-sync \
             mobile/install.sh \
             desktop/install.sh
+
+  markdownlint:
+    name: markdownlint-cli2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # Reads .markdownlint.json from the repo root — the same file that
+      # silences the editor warnings. One source of truth for the rules.
+      - name: Lint all Markdown files
+        uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          globs: "**/*.md"

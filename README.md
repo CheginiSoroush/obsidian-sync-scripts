@@ -1,4 +1,5 @@
 
+<div align="center">
 
 <pre>
  ██████   ██████╗           ███████╗ ██╗   ██╗ ███╗   ██╗  ██████
@@ -9,7 +10,7 @@
  ╚═════╝  ╚═════╝           ╚══════╝    ╚═╝    ╚═╝  ╚═══╝  ╚═════╝
 </pre>
 
-### ⚡ Enterprise-grade Obsidian ↔ GitHub sync — from your phone, your laptop, your anything.
+### ⚡ Enterprise-grade Obsidian ↔ GitHub sync — from your phone, your laptop, your anything
 
 **One script. Three platforms. Zero extra dependencies. Nine layers of defense.**
 
@@ -20,7 +21,6 @@
 [![Lint](https://github.com/CheginiSoroush/obsidian-sync-scripts/actions/workflows/lint.yml/badge.svg)](https://github.com/CheginiSoroush/obsidian-sync-scripts/actions/workflows/lint.yml)
 
 *Your notes deserve better than "hope the sync works."*
-
 
 ---
 
@@ -91,7 +91,7 @@ ob-sync doctor && ob-sync init && ob-sync sync
 
 **What a successful sync looks like:**
 
-```
+```text
 $ ob-sync sync
 
   Full Synchronization
@@ -117,7 +117,7 @@ $ ob-sync sync
 
 Run `ob-sync` with no arguments. On a phone, this is the whole point:
 
-```
+```text
 $ ob-sync
 
   ──────────────────────────────────────────
@@ -159,7 +159,7 @@ the lock is released between actions — press `1` five times in a row if you li
 ## ⌨️ Command Reference
 
 | Command | Description |
-|---|---|
+| --- | --- |
 | `ob-sync` | Interactive menu (or full sync when non-interactive — cron-safe) |
 | `ob-sync sync` | Full pipeline: check → backup → commit → fetch → rebase → push |
 | `ob-sync quick` | One verified backup + full sync in a single shot |
@@ -204,7 +204,7 @@ flowchart TD
 ## 🛡️ The 9 Layers of Defense
 
 | # | Layer | Guarantees |
-|---|---|---|
+| --- | --- | --- |
 | 1 | **PID Locking** | Two instances can never touch the vault simultaneously |
 | 2 | **Verified Backups** | An archive only counts if the full stream reads back *and* the SHA-256 is recorded |
 | 3 | **Atomic Publishing** | Backups are written to `.part` files and renamed — a crash can never leave a half-written archive |
@@ -226,7 +226,7 @@ flowchart TD
 Everything is overridable via environment variables — zero config files:
 
 | Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `OBS_VAULT` | `~/storage/shared/Documents/<vault>` (Termux) · `~/Documents/<vault>` (desktop) | Path to the Obsidian vault |
 | `OBS_REMOTE` | *(see script header)* | Git remote URL |
 | `OBS_BRANCH` | `main` | Tracked branch |
@@ -246,7 +246,7 @@ OBS_SKIP_BACKUP=1 OBS_GIT_TIMEOUT=300 ob-sync sync   # fast unattended sync
 ## 🚑 Disaster Recovery Playbook
 
 | Symptom | Run this |
-|---|---|
+| --- | --- |
 | *"Repository not in a safe state"* | `ob-sync sync` (auto-heals) |
 | Sync keeps failing mysteriously | `ob-sync health` |
 | `.git` is corrupted | `ob-sync repair` |
