@@ -67,12 +67,11 @@ on Linux and macOS.
 ### 📱 Android (Termux)
 
 ```bash
-pkg install curl
-curl -fsSL https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/mobile/install.sh | bash
-
-ob-sync doctor     # verify the environment
-ob-sync init       # clone or adopt your vault
-ob-sync            # open the interactive menu
+ ###   #              ####  #   #  #   #   #### 
+#   #  #             #      #   #  ##  #  #     
+#   #  ####    ###    ####   # #   # # #  #     
+#   #  #   #             #    #    #  ##  #     
+ ###   ####           ####    #    #   #   #### 
 ```
 
 ### 🖥️ Linux / macOS
