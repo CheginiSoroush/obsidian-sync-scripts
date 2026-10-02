@@ -13,6 +13,7 @@
 
 **One script. Three platforms. Zero extra dependencies. Nine layers of defense.**
 
+
 [![Version](https://img.shields.io/badge/version-8.0.0-00B4D8?style=for-the-badge&logo=semver&logoColor=white)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-00C896?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20macOS-3DDC84?style=for-the-badge&logo=android&logoColor=white)](#-quick-start)
