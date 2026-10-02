@@ -19,13 +19,17 @@ platform differences belong behind the portability helpers inside the script.
 
 1. Make your change in `bin/ob-sync` (or the installers).
 2. Lint locally:
+
    ```bash
    shellcheck -x -S warning bin/ob-sync mobile/install.sh desktop/install.sh
    ```
+
 3. Smoke-test on a real device or machine:
+
    ```bash
    ob-sync doctor && ob-sync health && ob-sync quick
    ```
+
 4. Commit with a [Conventional Commits](https://www.conventionalcommits.org/)
    message, e.g. `fix: prune now orders backups by embedded timestamp`.
 
