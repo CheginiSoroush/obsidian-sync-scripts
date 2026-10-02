@@ -1,25 +1,16 @@
-# فایل‌های موقت
-*.tmp
-*.bak
-*~
+# OS noise
 .DS_Store
+Thumbs.db
+desktop.ini
 
-# فایل‌های حساس
-.env
-*.token
-*.key
-
-# پوشه‌های سیستم
-__pycache__/
-*.pyc
-node_modules/
-
-# فایل‌های Editor
-.vscode/
-.idea/
+# Editors
 *.swp
-*.swo
+*~
+.idea/
+.vscode/
 
-# فایل‌های بکاپ
-*.tar.gz
-*.zip
+# Runtime artifacts — never commit these
+*.log
+*.log.*
+*.part
+obsidian-backups/

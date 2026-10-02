@@ -1,34 +1,61 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# ─────────────────────────────────────────────────────────────────────────────
+#   ob-sync — mobile installer (Termux / Android)
+#
+#   Installs bin/ob-sync into $PREFIX/bin, verifies dependencies and
+#   points at the next setup steps. Prefers a local checkout of this
+#   repository; falls back to fetching the core from GitHub raw.
+# ─────────────────────────────────────────────────────────────────────────────
 
-echo "🚀 نصب Obsidian Sync برای موبایل..."
+set -euo pipefail
 
-# ۱. دانلود اسکریپت
-curl -sSL https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/mobile/ob-sync -o ~/ob-sync
+REPO_RAW="https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main"
 
-# ۲. تنظیم مجوز
-chmod +x ~/ob-sync
+ok()   { printf '\033[92m[ OK ]\033[0m %s\n' "$1"; }
+say()  { printf '\033[96m[INFO]\033[0m %s\n' "$1"; }
+fail() { printf '\033[91m[FAIL]\033[0m %s\n' "$1" >&2; exit 1; }
 
-# ۳. ایجاد Alias
-if ! grep -q "ob-sync" ~/.bashrc; then
-    echo 'alias ob-sync="$HOME/ob-sync"' >> ~/.bashrc
-fi
+# This installer is Termux-only — desktop users have their own.
+[[ -n "${TERMUX_VERSION:-}" && -n "${PREFIX:-}" ]] || {
+    fail "Not running under Termux — for Linux/macOS use desktop/install.sh"
+}
 
-# ۴. اعمال تغییرات
-source ~/.bashrc
+DEST="$PREFIX/bin"
+mkdir -p "$DEST"
 
-# ۵. بررسی
-if [ -f ~/ob-sync ]; then
-    echo "✅ نصب موفقیت‌آمیز بود!"
-    echo ""
-    echo "📖 دستورات:"
-    echo "  ob-sync          - Sync کامل"
-    echo "  ob-sync pull     - فقط Pull"
-    echo "  ob-sync push     - فقط Push"
-    echo "  ob-sync status   - وضعیت"
-    echo "  ob-sync help     - راهنما"
-    echo ""
-    echo "💡 برای شروع: ob-sync status"
+# Prefer a local checkout, fall back to a remote download.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ -f "$SCRIPT_DIR/../bin/ob-sync" ]]; then
+    say "Installing from local checkout"
+    cp -- "$SCRIPT_DIR/../bin/ob-sync" "$DEST/ob-sync"
 else
-    echo "❌ نصب ناموفق!"
-    echo "لطفاً دستی نصب کنید"
+    command -v curl >/dev/null 2>&1 || fail "curl is required — run: pkg install curl"
+    say "Downloading ob-sync from GitHub"
+    curl -fsSL "$REPO_RAW/bin/ob-sync" -o "$DEST/ob-sync" \
+        || fail "Download failed — check your network connection"
 fi
+
+chmod 0755 "$DEST/ob-sync"
+[[ -x "$DEST/ob-sync" ]] || fail "Installation incomplete — check $DEST"
+ok "Installed: $DEST/ob-sync"
+
+# Dependencies.
+if ! command -v git >/dev/null 2>&1; then
+    say "Installing git"
+    pkg install -y git || fail "Failed to install git"
+fi
+ok "git is available"
+
+# Storage permission (user action may be required).
+if [[ -d "$HOME/storage/shared" ]]; then
+    ok "Shared storage is accessible"
+else
+    say "Storage permission missing — run: termux-setup-storage"
+fi
+
+printf '\n'
+ok "Setup complete. Next steps:"
+printf '   1)  ob-sync doctor\n'
+printf '   2)  ob-sync init\n'
+printf '   3)  ob-sync\n'

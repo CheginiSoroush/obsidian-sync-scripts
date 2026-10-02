@@ -1,0 +1,2254 @@
+#!/usr/bin/env bash
+#
+# ─────────────────────────────────────────────────────────────────────────────
+#
+#   ob-sync — Obsidian Git Sync for Termux, Linux & macOS
+#
+# ─────────────────────────────────────────────────────────────────────────────
+#
+#   Version   : 8.0.0
+#   Author    : Soroush Chegini
+#   License   : MIT
+#   Repository: https://github.com/CheginiSoroush/obsidian-sync-scripts
+#   Platforms : Android (Termux) · Linux · macOS    (Bash 4+ required)
+#   Depends on: git, tar, coreutils/findutils (du, sort, cut, tr, wc, ...),
+#               find, grep, and ONE hashing tool (sha256sum OR shasum)
+#
+#   WHAT IS THIS?
+#       Keeps an Obsidian vault version-controlled against a Git remote
+#       (e.g. GitHub) from the terminal — phone or desktop. Built for the
+#       hostile conditions of Android shared storage (no exec bits, flaky
+#       mobile networks, sudden process kills) and equally at home on a
+#       Linux box or a Mac.
+#
+#   DESIGN PRINCIPLES
+#       · Atomic writes     — no half-finished files, ever
+#       · Verified backups  — every archive is checksummed and test-read
+#       · Temp hygiene      — every runtime temporary is registered and
+#                             swept on ANY exit path, interruption included
+#       · PID locking       — concurrent runs are impossible; the lock is
+#                             released between menu operations
+#       · Self-healing      — interrupted rebases/merges recover automatically
+#       · Additive repair   — local files always win over remote state
+#       · Fail-closed I/O   — restore audits archive members (tar-slip safe)
+#       · One core          — platform differences live behind portability
+#                             helpers, never in forks of this script
+#       · Graceful failure  — errors report and return; nothing exits silently
+#
+#   RELEASE NOTES — 8.0.0 (platform unification)
+#       · Single platform-aware core (bin/ob-sync) replaces the separate
+#         desktop/mobile forks — one source of truth, zero drift.
+#       · Runtime platform detection (Termux / Linux / macOS) drives
+#         defaults, doctor checks and first-time setup.
+#       · BSD/macOS portability: shasum fallback for sha256sum, portable
+#         size helpers, no GNU-only flags (du --exclude, stat -c, xargs -r).
+#       · Canonical command name: ob-sync (per-platform names retired).
+#
+#   TABLE OF CONTENTS
+#        1. Guard & strict mode      9. Backup engine
+#        2. Configuration           10. Git helpers
+#        3. Colors                  11. Repair engine (two-phase)
+#        4. Logging                 12. Commands
+#        5. UI helpers              13. Interactive menu
+#        6. Portability helpers     14. Help & version
+#        7. Temp file registry      15. Dispatcher & entry point
+#        8. Locking
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Require bash 4+ (case-modifier expansion, null-delimited reads, etc.).
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "ob-sync: bash 4.0 or newer is required (found: ${BASH_VERSION:-unknown})" >&2
+    [[ -n "${TERMUX_VERSION:-}" ]] || echo "  On macOS: brew install bash" >&2
+    exit 1
+fi
+
+# Strict mode. `-e` is deliberately omitted: every failure path is handled
+# explicitly so the interactive menu survives errors and the user always
+# gets a clean message instead of a silent mid-operation abort.
+set -uo pipefail
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  2. CONFIGURATION (every value can be overridden via environment)
+# ═════════════════════════════════════════════════════════════════════════════
+
+readonly VERSION="8.0.0"
+
+# ── Platform detection ──────────────────────────────────────────────────────
+# Termux exports TERMUX_VERSION in every session; desktop shells never do.
+# All platform-dependent defaults, checks and hints branch off this flag —
+# there is exactly ONE core script and exactly ONE place it branches.
+IS_TERMUX=0
+[[ -n "${TERMUX_VERSION:-}" ]] && IS_TERMUX=1
+
+# Default vault location per platform: Android shared storage vs. the
+# desktop Documents folder.
+if (( IS_TERMUX )); then
+    DEFAULT_VAULT="$HOME/storage/shared/Documents/Soroush"
+else
+    DEFAULT_VAULT="$HOME/Documents/Soroush"
+fi
+
+# Vault and git settings.
+VAULT="${OBS_VAULT:-$DEFAULT_VAULT}"
+REMOTE="${OBS_REMOTE:-https://github.com/CheginiSoroush/obsidian.git}"
+BRANCH="${OBS_BRANCH:-main}"
+
+# Backup settings.
+BACKUP_DIR="${OBS_BACKUP_DIR:-$HOME/obsidian-backups}"
+KEEP_BACKUPS="${OBS_KEEP_BACKUPS:-10}"
+
+# Logging (set OBS_LOG="" to disable).
+LOG_FILE="${OBS_LOG:-$HOME/ob-sync.log}"
+
+# Network hardening: maximum runtime in seconds for any remote git
+# operation. Set OBS_GIT_TIMEOUT=0 to disable the watchdog entirely.
+GIT_TIMEOUT="${OBS_GIT_TIMEOUT:-120}"
+
+# Behaviour switches.
+SKIP_BACKUP="${OBS_SKIP_BACKUP:-0}"
+ATTACH_DIR="${OBS_ATTACH_DIR:-Attachments}"
+
+# Internal state (mutated by flags, the lock manager and temp registry).
+LOCK_DIR="${TMPDIR:-/tmp}/obs-sync.lock"
+STATE_FILE="$BACKUP_DIR/.last-sync"
+ASSUME_YES=0
+STEP_NUM=0
+LOCK_ACQUIRED=0
+TEMP_PATHS=()
+
+# Sanitize numeric settings so arithmetic never explodes on bad input.
+[[ "$KEEP_BACKUPS" =~ ^[0-9]+$ ]] || KEEP_BACKUPS=10
+[[ "$GIT_TIMEOUT"  =~ ^[0-9]+$ ]] || GIT_TIMEOUT=120
+
+# Optional tooling detection (graceful fallbacks for minimal systems).
+HAS_TIMEOUT=0; command -v timeout >/dev/null 2>&1 && HAS_TIMEOUT=1
+HAS_PGREP=0;   command -v pgrep   >/dev/null 2>&1 && HAS_PGREP=1
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  3. COLORS
+# ═════════════════════════════════════════════════════════════════════════════
+
+##
+# Initialize the color palette. Disabled automatically when output is
+# piped, when NO_COLOR (https://no-color.org) is set, or on dumb terminals.
+##
+init_colors() {
+    if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+        C_RESET=$'\033[0m';  C_BOLD=$'\033[1m';   C_DIM=$'\033[2m'
+        C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_BLUE=$'\033[34m'
+        C_MAGENTA=$'\033[35m'; C_CYAN=$'\033[36m'
+        C_BRIGHT_RED=$'\033[91m';      C_BRIGHT_GREEN=$'\033[92m'
+        C_BRIGHT_YELLOW=$'\033[93m';   C_BRIGHT_BLUE=$'\033[94m'
+        C_BRIGHT_MAGENTA=$'\033[95m';  C_BRIGHT_CYAN=$'\033[96m'
+        C_BRIGHT_WHITE=$'\033[97m'
+    else
+        C_RESET='' C_BOLD='' C_DIM='' C_GREEN='' C_YELLOW='' C_BLUE=''
+        C_MAGENTA='' C_CYAN='' C_BRIGHT_RED='' C_BRIGHT_GREEN=''
+        C_BRIGHT_YELLOW='' C_BRIGHT_BLUE='' C_BRIGHT_MAGENTA=''
+        C_BRIGHT_CYAN='' C_BRIGHT_WHITE=''
+    fi
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  4. LOGGING
+# ═════════════════════════════════════════════════════════════════════════════
+
+##
+# Append a timestamped entry to the log file (if logging is enabled).
+# Best-effort by design: logging failures never break the operation.
+##
+log() {
+    [[ -n "${LOG_FILE:-}" ]] || return 0
+    printf '[%s] [%-14s] %s\n' \
+        "$(date '+%F %T')" "${FUNCNAME[1]:-main}" "$*" \
+        >> "$LOG_FILE" 2>/dev/null || :
+    return 0
+}
+
+##
+# Prepare the log file and rotate it once it exceeds 1 MiB.
+# File size via `wc -c` — portable across GNU and BSD userland.
+##
+init_log() {
+    [[ -n "$LOG_FILE" ]] || return 0
+    if ! touch "$LOG_FILE" 2>/dev/null; then
+        LOG_FILE=""
+        return 0
+    fi
+    local size
+    size=$(wc -c < "$LOG_FILE" 2>/dev/null | tr -d ' ') || size=0
+    (( size > 1048576 )) && mv -f "$LOG_FILE" "$LOG_FILE.1" 2>/dev/null
+    return 0
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  5. UI HELPERS
+# ═════════════════════════════════════════════════════════════════════════════
+
+##
+# Horizontal rule. @param $1 character (default '-')  @param $2 width
+##
+hr() {
+    local char="${1:--}"
+    local width="${2:-56}"
+    printf '%s' "$C_BLUE"
+    printf '  %*s\n' "$width" '' | tr ' ' "$char"
+    printf '%s' "$C_RESET"
+}
+
+##
+# Print a section banner. Also resets the per-section step counter.
+##
+section() {
+    STEP_NUM=0
+    echo
+    printf '  %s%s%s\n' "$C_BRIGHT_BLUE$C_BOLD" "$1" "$C_RESET"
+    hr
+}
+
+##
+# Print an auto-numbered step line within the current section.
+##
+step() {
+    STEP_NUM=$((STEP_NUM + 1))
+    printf '  %s[%d]%s %s\n' "$C_BRIGHT_BLUE" "$STEP_NUM" "$C_RESET" "$1"
+}
+
+success() { printf '  %s[ OK ]%s %s\n' "$C_BRIGHT_GREEN"  "$C_RESET" "$1"; }
+error()   { printf '  %s[FAIL]%s %s\n' "$C_BRIGHT_RED"    "$C_RESET" "$1" >&2; log "ERROR: $1"; }
+warn()    { printf '  %s[WARN]%s %s\n' "$C_BRIGHT_YELLOW" "$C_RESET" "$1"; }
+info()    { printf '  %s[INFO]%s %s\n' "$C_BRIGHT_CYAN"   "$C_RESET" "$1"; }
+
+##
+# Aligned key/value line. @param $1 key  @param $2 value  @param $3 key color
+##
+kv() {
+    printf '  %s%-18s%s %s%s%s\n' \
+        "${3:-$C_CYAN}" "$1:" "$C_RESET" "$C_BOLD" "$2" "$C_RESET"
+}
+
+##
+# Remove listed paths, safely skipping empty/unset entries.
+##
+purge() {
+    local p
+    for p in "$@"; do
+        [[ -n "$p" ]] && rm -rf -- "$p" 2>/dev/null
+    done
+    return 0
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  6. PORTABILITY HELPERS (Termux · Linux · macOS)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# This script must behave identically on Termux, Linux distros and macOS.
+# The BSD userland on macOS lacks several GNU conveniences the core would
+# otherwise reach for:
+#
+#   sha256sum     → macOS ships shasum(1) instead
+#   stat -c '%s'  → BSD stat uses -f and different specifiers
+#   du --exclude  → not a BSD option
+#   xargs -r      → GNU-only no-run-if-empty flag
+#
+# Every one of those is routed through the helpers below, so the rest of
+# the script stays platform-agnostic. Adding a new GNU-ism directly in
+# the core is a portability bug — add a helper here instead.
+
+##
+# Print the SHA-256 hex digest of a file, or nothing when no hashing tool
+# exists on this system.
+##
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+    fi
+    return 0
+}
+
+##
+# Write a .sha256 sidecar next to an archive (best-effort).
+##
+write_sidecar() {
+    local archive="$1"
+    local sum
+    sum=$(sha256_of "$archive")
+    [[ -n "$sum" ]] \
+        && printf '%s  %s\n' "$sum" "${archive##*/}" > "${archive}.sha256" 2>/dev/null
+    return 0
+}
+
+##
+# Verify an archive against its .sha256 sidecar, if one exists.
+# @return 0 when verified or no sidecar is present, 1 on mismatch
+##
+verify_sidecar() {
+    local archive="$1"
+    [[ -f "${archive}.sha256" ]] || return 0
+
+    local dir=${archive%/*} name=${archive##*/}
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        (cd "$dir" && sha256sum -c "$name.sha256") >/dev/null 2>&1
+    elif command -v shasum >/dev/null 2>&1; then
+        (cd "$dir" && shasum -a 256 -c "$name.sha256") >/dev/null 2>&1
+    else
+        # No hashing tool: cannot verify, but that is not a mismatch.
+        log "no SHA-256 tool available — sidecar check skipped"
+        return 0
+    fi
+}
+
+##
+# Human-readable size of the vault contents, excluding .git.
+# Portable across GNU and BSD: per-file POSIX `du -k` summed in awk —
+# `du --exclude` does not exist on macOS.
+##
+vault_size() {
+    local out
+    out=$(cd "$VAULT" 2>/dev/null || exit 0
+          find . -name .git -prune -o -type f -exec du -k {} + 2>/dev/null \
+          | awk '{ s += $1 }
+                  END {
+                      if (s < 1024)    { printf "%dK",  s;       exit }
+                      if (s < 1048576) { printf "%.1fM", s/1024;  exit }
+                      printf "%.1fG", s/1048576
+                  }')
+    printf '%s' "${out:-unknown}"
+}
+
+##
+# Platform-appropriate package-manager hint, used by doctor and every
+# dependency failure so the user always gets an actionable command.
+##
+install_hint() {
+    if (( IS_TERMUX )); then
+        printf '%s' 'pkg install git coreutils findutils grep'
+    elif [[ "${OSTYPE:-}" == darwin* ]]; then
+        printf '%s' 'brew install bash git coreutils findutils grep'
+    else
+        printf '%s' 'install git & coreutils via apt / dnf / pacman'
+    fi
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  7. TEMP FILE REGISTRY
+# ═════════════════════════════════════════════════════════════════════════════
+
+##
+# Register a temporary path for removal by the EXIT handler. Every mktemp
+# result in this script goes through here, so an interruption (SIGINT,
+# SIGTERM, a failed step) can never leak temporaries behind.
+#
+# Registered paths may legitimately disappear before exit (e.g. a .part
+# file renamed into its final archive) — removal then silently no-ops.
+#
+# Deliberate exception: execute_repair's rollback holder (.git-old-*) is
+# NOT registered. It contains the user's original .git, so it must survive
+# an interruption; the next run's clean_repair_artifacts removes it, and
+# the pre-repair full backup is the ultimate safety net.
+##
+temp_register() {
+    TEMP_PATHS+=("$1")
+    return 0
+}
+
+##
+# Sweep every registered temporary. Invoked from the EXIT handler only.
+##
+cleanup_temp() {
+    local p
+    for p in "${TEMP_PATHS[@]:-}"; do
+        [[ -n "$p" ]] && rm -rf -- "$p" 2>/dev/null
+    done
+    TEMP_PATHS=()
+    return 0
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  8. LOCKING
+# ═════════════════════════════════════════════════════════════════════════════
+
+##
+# Acquire an exclusive lock via mkdir (atomic on POSIX filesystems).
+# A stale lock whose owner process is dead is detected via PID and reclaimed.
+# @return 0 on success, 2 when the lock is unavailable
+##
+acquire_lock() {
+    if [[ -d "$LOCK_DIR" ]]; then
+        local pid=""
+        pid=$(cat "$LOCK_DIR/pid" 2>/dev/null) || :
+
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            error "Another instance is running (PID: $pid)"
+            return 2
+        fi
+
+        warn "Removing stale lock (previous PID: ${pid:-unknown})"
+        rm -rf -- "$LOCK_DIR"
+    fi
+
+    # A plain mkdir is atomic: exactly one caller can win. Deliberately
+    # no `-p` — it must fail if we lost the race.
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+        error "Failed to acquire lock: $LOCK_DIR"
+        return 2
+    fi
+
+    printf '%s\n' "$$" > "$LOCK_DIR/pid"
+    LOCK_ACQUIRED=1
+    return 0
+}
+
+##
+# Release the lock, but only if this instance currently holds it.
+##
+release_lock() {
+    if (( LOCK_ACQUIRED )); then
+        rm -rf -- "$LOCK_DIR" 2>/dev/null
+        LOCK_ACQUIRED=0
+    fi
+    return 0
+}
+
+##
+# EXIT handler: release the lock (if held) and sweep registered temporaries.
+# Installed once, globally, in main(); both branches are no-ops unless
+# this instance actually owns something.
+##
+on_exit() {
+    release_lock
+    cleanup_temp
+    return 0
+}
+
+##
+# Run a mutating command while holding the lock, releasing it afterwards.
+# This is what allows the interactive menu to run operation after
+# operation without tripping over its own lock.
+##
+with_lock() {
+    acquire_lock || return 2
+    "$@"
+    local rc=$?
+    release_lock
+    return "$rc"
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  9. BACKUP ENGINE
+# ═════════════════════════════════════════════════════════════════════════════
+
+##
+# List backup archives newest-first, ordered by the timestamp embedded in
+# each filename (YYYYMMDD-HHMMSS).
+#
+# A plain name sort is NOT chronological here: filenames are prefixed with
+# their origin ("quick-", "pre-sync-", "pre-repair-", ...), so lexicographic
+# order groups by prefix first and would rank every "quick-*" above every
+# "pre-repair-*" regardless of age — sacrificing the newest safety backups
+# during pruning and mis-selecting "restore latest".
+#
+# Entries without a parseable timestamp sort as the oldest. Paths containing
+# tab characters are not supported (pathological on every target platform).
+#
+# @stdout  archive paths, null-delimited, newest first
+##
+list_backups_desc() {
+    local f ts
+    while IFS= read -r -d '' f; do
+        ts="00000000-000000"
+        if [[ "${f##*/}" =~ ([0-9]{8})-([0-9]{6}) ]]; then
+            ts="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
+        fi
+        # Fixed-width timestamp key first, then the path as tie-breaker.
+        printf '%s\t%s\0' "$ts" "$f"
+    done < <(find "$BACKUP_DIR" -maxdepth 1 -name '*.tar.gz' -type f -print0 2>/dev/null) \
+        | sort -z -r \
+        | while IFS=$'\t' read -r -d '' _ f; do
+            printf '%s\0' "$f"
+        done
+}
+
+##
+# Create a verified, atomically-published full vault backup.
+#
+# Pipeline: archive → verify → atomic rename → sidecar checksum → sanity check
+#
+# @param $1  filename prefix (e.g. "pre-sync")
+# @stdout    absolute path of the finished archive
+# @return    0 on success, 1 on failure
+##
+make_backup() {
+    local prefix="${1:-backup}"
+    local timestamp path tmp n=0
+
+    mkdir -p "$BACKUP_DIR" \
+        || { error "Cannot create backup directory: $BACKUP_DIR"; return 1; }
+
+    timestamp=$(date '+%Y%m%d-%H%M%S')
+    path="$BACKUP_DIR/${prefix}-${timestamp}.tar.gz"
+
+    # Guard against same-second filename collisions (e.g. quick → sync).
+    while [[ -e "$path" ]]; do
+        n=$((n + 1))
+        path="$BACKUP_DIR/${prefix}-${timestamp}-${n}.tar.gz"
+    done
+    tmp="${path}.part"
+    temp_register "$tmp"
+
+    # Phase 1 — archive the vault (including .git) into a temp file, so a
+    # crash can never leave behind a half-written "valid-looking" archive.
+    if ! tar -czf "$tmp" -C "$VAULT" . 2>/dev/null; then
+        rm -f -- "$tmp"
+        error "Backup creation failed"
+        return 1
+    fi
+
+    # Phase 2 — verify the archive stream is fully readable.
+    if ! tar -tzf "$tmp" >/dev/null 2>&1; then
+        rm -f -- "$tmp"
+        error "Backup verification failed (corrupt archive)"
+        return 1
+    fi
+
+    # Phase 3 — atomic publish: rename is atomic on the same filesystem.
+    if ! mv -f "$tmp" "$path"; then
+        rm -f -- "$tmp"
+        error "Failed to finalize backup"
+        return 1
+    fi
+
+    # Phase 4 — sidecar checksum so `ob-sync verify` can audit it later.
+    write_sidecar "$path"
+
+    # Phase 5 — final sanity check.
+    if [[ ! -s "$path" ]]; then
+        rm -f -- "$path" "${path}.sha256"
+        error "Backup file is empty"
+        return 1
+    fi
+
+    log "Backup created: ${path##*/}"
+    printf '%s\n' "$path"
+    return 0
+}
+
+##
+# Delete the oldest backups beyond the retention limit (sidecars included),
+# ordered chronologically via list_backups_desc — never by raw filename.
+#
+# Stale "*.part" temporaries from interrupted backups are swept here as
+# well: backups only ever run under the lock, so no live .part file can
+# exist at this point.
+##
+prune_backups() {
+    (( KEEP_BACKUPS > 0 )) || return 0
+
+    find "$BACKUP_DIR" -maxdepth 1 -name '*.part' -type f \
+        -exec rm -f -- {} + 2>/dev/null
+
+    local -a archives=()
+    local f
+    while IFS= read -r -d '' f; do
+        archives+=("$f")
+    done < <(list_backups_desc)
+
+    local total=${#archives[@]}
+    (( total > KEEP_BACKUPS )) || return 0
+
+    local removed=0 i archive
+    for (( i = KEEP_BACKUPS; i < total; i++ )); do
+        archive="${archives[i]}"
+        rm -f -- "$archive" "${archive}.sha256" 2>/dev/null \
+            && removed=$((removed + 1))
+    done
+
+    (( removed > 0 )) || return 0
+    log "Pruned $removed backup(s)"
+    info "Pruned $removed old backup(s) — retaining $KEEP_BACKUPS"
+    return 0
+}
+
+##
+# Audit an archive for members that are unsafe to extract, blocking the
+# classic tar-slip vectors:
+#   · absolute paths            (e.g. /data/...)
+#   · parent traversal          (any ".." path component)
+#   · special members           (symlinks, hardlinks, devices, fifos)
+#
+# Our own backups never contain such members (the default vault lives on
+# Android shared storage, which cannot even hold symlinks), so any hit
+# means a foreign or tampered archive and the restore is refused.
+#
+# The check is fail-closed by construction: listing lines are checked
+# conservatively, and anything ambiguous is rejected rather than trusted.
+#
+# @param $1  archive path
+# @return    0 safe, 1 unsafe (reason reported)
+##
+check_archive_safe() {
+    local archive="$1"
+    local entry line count=0
+
+    # Pass 1 — every entry name must be relative and free of ".."
+    # components. Prepending/trailing slashes normalize edge cases so a
+    # single case pattern catches "..", "../x", "a/../b" and "a/..".
+    while IFS= read -r entry; do
+        [[ -z "$entry" ]] && continue
+        (( count++ ))
+        if [[ "$entry" == /* ]]; then
+            error "Archive contains an absolute path: $entry"
+            return 1
+        fi
+        case "/$entry/" in
+            */../*)
+                error "Archive contains a path traversal: $entry"
+                return 1
+                ;;
+        esac
+    done < <(tar -tzf "$archive" 2>/dev/null)
+
+    if (( count == 0 )); then
+        error "Archive is empty"
+        return 1
+    fi
+
+    # Pass 2 — member types. In `tar -tv` output the first character of
+    # each line is the member type: '-' regular, 'd' directory, anything
+    # else (l/h/p/c/b) is refused.
+    while IFS= read -r line; do
+        case "$line" in
+            -*|d*) ;;
+            *)
+                error "Archive contains a special member (type '${line:0:1}') — refused"
+                return 1
+                ;;
+        esac
+    done < <(tar -tvzf "$archive" 2>/dev/null)
+
+    return 0
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  10. GIT HELPERS
+# ═════════════════════════════════════════════════════════════════════════════
+
+##
+# Run git inside the vault (local, non-network operations).
+##
+g() {
+    git -c "safe.directory=$VAULT" -C "$VAULT" "$@"
+}
+
+##
+# Execute a command under the network watchdog so a dead connection can
+# never hang the whole operation. A timeout of 0 disables the watchdog.
+##
+run_with_timeout() {
+    if (( HAS_TIMEOUT && GIT_TIMEOUT > 0 )); then
+        timeout "$GIT_TIMEOUT" "$@"
+    else
+        "$@"
+    fi
+}
+
+##
+# Run a network git operation inside the vault, wrapped in the watchdog.
+##
+net() {
+    run_with_timeout git -c "safe.directory=$VAULT" -C "$VAULT" "$@"
+}
+
+##
+# Ensure a remote named 'origin' is configured. Produces a clear message
+# instead of git's cryptic "no such remote" errors later in the flow.
+##
+ensure_origin() {
+    if ! g remote get-url origin >/dev/null 2>&1; then
+        error "Remote 'origin' is not configured"
+        warn "Fix: ob-sync repair  (or re-run: ob-sync init)"
+        return 1
+    fi
+    return 0
+}
+
+##
+# True when the repository is in a clean, operable state: valid HEAD,
+# no in-progress rebase/merge/cherry-pick/revert, no stale index lock.
+##
+check_repo_safe() {
+    [[ -d "$VAULT/.git" ]]                            || return 1
+    g rev-parse --verify --quiet HEAD >/dev/null 2>&1 || return 1
+    [[ ! -d "$VAULT/.git/rebase-merge" ]]             || return 1
+    [[ ! -d "$VAULT/.git/rebase-apply" ]]             || return 1
+    [[ ! -f "$VAULT/.git/MERGE_HEAD" ]]               || return 1
+    [[ ! -f "$VAULT/.git/CHERRY_PICK_HEAD" ]]         || return 1
+    [[ ! -f "$VAULT/.git/REVERT_HEAD" ]]              || return 1
+    [[ ! -f "$VAULT/.git/index.lock" ]]               || return 1
+    return 0
+}
+
+##
+# Recover from interrupted git operations (killed syncs, dead processes).
+# index.lock is only removed when no live git process is using the vault.
+##
+clear_stuck_state() {
+    if [[ -d "$VAULT/.git/rebase-merge" || -d "$VAULT/.git/rebase-apply" ]]; then
+        warn "Aborting unfinished rebase"
+        g rebase --abort >/dev/null 2>&1 || :
+    fi
+    if [[ -f "$VAULT/.git/MERGE_HEAD" ]]; then
+        warn "Aborting unfinished merge"
+        g merge --abort >/dev/null 2>&1 || :
+    fi
+    if [[ -f "$VAULT/.git/CHERRY_PICK_HEAD" ]]; then
+        warn "Aborting unfinished cherry-pick"
+        g cherry-pick --abort >/dev/null 2>&1 || :
+    fi
+    if [[ -f "$VAULT/.git/REVERT_HEAD" ]]; then
+        warn "Aborting unfinished revert"
+        g revert --abort >/dev/null 2>&1 || :
+    fi
+    if [[ -f "$VAULT/.git/index.lock" ]]; then
+        # Only safe to remove when no live git process owns the vault.
+        if (( HAS_PGREP )) && pgrep -f "git.*$VAULT" >/dev/null 2>&1; then
+            error "A live git process holds index.lock — try again shortly"
+            return 1
+        fi
+        warn "Removing stale index.lock"
+        rm -f -- "$VAULT/.git/index.lock"
+    fi
+    return 0
+}
+
+##
+# Delete staging directories left behind by an interrupted repair.
+# Safe at any time: a live repair holds the lock, so no valid staging
+# directory can exist while this is executing. All historical naming
+# patterns are cleaned (".git-original-*" comes from older versions).
+##
+clean_repair_artifacts() {
+    local leftover
+    for leftover in "$VAULT"/.git-staged-* "$VAULT"/.git-old-* "$VAULT"/.git-original-*; do
+        if [[ -e "$leftover" ]]; then
+            warn "Removing leftover repair artifact: ${leftover##*/}"
+            rm -rf -- "$leftover"
+        fi
+    done
+    return 0
+}
+
+##
+# Ensure the repository is operable, attempting automatic recovery once.
+##
+ensure_safe() {
+    clean_repair_artifacts
+    check_repo_safe && return 0
+
+    warn "Repository is not in a safe state"
+    clear_stuck_state || return 1
+
+    if check_repo_safe; then
+        success "Repository recovered automatically"
+        return 0
+    fi
+
+    error "Repository still unsafe — run: ob-sync repair"
+    return 1
+}
+
+##
+# Settings that make git behave on Android shared storage
+# (no exec-bit support, unicode filenames, linear history).
+##
+configure_repo() {
+    g config core.fileMode  false
+    g config core.quotePath false
+    g config pull.rebase    true
+    g config fetch.prune    true
+    return 0
+}
+
+##
+# Guarantee a committable identity exists (repo-local fallback).
+##
+ensure_identity() {
+    local changed=0
+    [[ -n "$(g config user.email 2>/dev/null)" ]] \
+        || { g config user.email "obsidian@localhost"; changed=1; }
+    [[ -n "$(g config user.name 2>/dev/null)" ]] \
+        || { g config user.name  "Obsidian Sync";     changed=1; }
+    (( changed )) && info "Applied fallback git identity (repo-local)"
+    return 0
+}
+
+##
+# Stage and commit all pending working-tree changes.
+# @param $1  conventional-commit label (e.g. "chore(sync)")
+##
+commit_changes() {
+    local label="${1:-chore(sync)}"
+    local status count
+
+    if ! status=$(g status --porcelain 2>/dev/null); then
+        error "Failed to read repository status"
+        return 1
+    fi
+
+    if [[ -z "$status" ]]; then
+        info "No local changes to commit"
+        return 0
+    fi
+
+    count=$(printf '%s\n' "$status" | wc -l | tr -d ' ')
+
+    ensure_identity
+    g add -A 2>/dev/null || { error "Failed to stage changes"; return 1; }
+    g commit -q -m "$label: auto-save $count file(s) [$(date '+%F %H:%M')]" 2>/dev/null \
+        || { error "Commit failed"; return 1; }
+
+    success "Committed $count changed file(s)"
+    return 0
+}
+
+##
+# True when the tracked branch is known on the remote (after a fetch).
+##
+remote_branch_exists() {
+    g rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null 2>&1
+}
+
+##
+# Rebase onto origin/<branch>. On conflict, report the culprits and abort
+# cleanly so the local state is left exactly as it was.
+##
+rebase_onto_remote() {
+    if g rebase "origin/$BRANCH" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [[ -d "$VAULT/.git/rebase-merge" ]]; then
+        error "Merge conflict detected — aborting rebase"
+        local -a conflicted=()
+        local file
+        # Null-delimited: filenames containing newlines are listed safely.
+        while IFS= read -r -d '' file; do
+            conflicted+=("$file")
+        done < <(g diff --name-only --diff-filter=U -z 2>/dev/null)
+
+        if (( ${#conflicted[@]} )); then
+            warn "Conflicting file(s):"
+            for file in "${conflicted[@]}"; do
+                printf '      %s%s%s\n' "$C_YELLOW" "$file" "$C_RESET"
+            done
+        fi
+        g rebase --abort >/dev/null 2>&1
+        warn "Local commits are safe. Resolve the conflict on another device, then retry."
+    else
+        error "Rebase failed"
+    fi
+    return 1
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  11. REPAIR ENGINE (two-phase, atomic)
+# ═════════════════════════════════════════════════════════════════════════════
+
+##
+# Phase 1 — clone a fresh copy of the remote and verify it.
+# Completely non-destructive: nothing in the vault is touched.
+# NOTE: emits ONLY the candidate path on stdout; all diagnostics go to
+# stderr, because the caller captures stdout.
+# @stdout  path to the candidate directory
+##
+prepare_repair() {
+    local candidate
+    candidate=$(mktemp -d "${BACKUP_DIR}/repair-XXXXXX") || return 1
+    temp_register "$candidate"
+
+    log "Cloning fresh copy for repair"
+    if ! run_with_timeout git clone --quiet --single-branch --branch "$BRANCH" \
+            "$REMOTE" "$candidate/repo" 2>/dev/null; then
+        rm -rf -- "$candidate"
+        error "Clone failed (network, credentials, or wrong branch '$BRANCH')"
+        return 1
+    fi
+
+    if ! git -C "$candidate/repo" fsck --connectivity-only >/dev/null 2>&1; then
+        rm -rf -- "$candidate"
+        error "Clone verification failed"
+        return 1
+    fi
+
+    printf '%s\n' "$candidate"
+    return 0
+}
+
+##
+# Phase 2 — swap the vault's .git for the verified candidate, then restore
+# any file that exists remotely but is missing locally.
+#
+# Ordering is critical and deliberate:
+#   swap .git  →  restore files  →  delete candidate
+# The candidate is the data source for the restore step, so it must
+# survive until the restore loop has finished consuming it. (Deleting it
+# first turned the restore into dead code in earlier versions.)
+#
+# Additive only: existing local files always win and are never overwritten.
+#
+# @param $1  candidate directory returned by prepare_repair
+##
+execute_repair() {
+    local candidate="$1"
+    local staged="" old_holder=""
+
+    # Safety net: a verified backup of the current (possibly broken) state.
+    local backup_path
+    backup_path=$(make_backup "pre-repair") || { purge "$candidate"; return 1; }
+    prune_backups
+    success "Safety backup: ${backup_path##*/}"
+
+    # Stage the fresh .git INSIDE the vault so the final install is a
+    # same-filesystem rename (atomic on shared storage).
+    staged=$(mktemp -d "$VAULT/.git-staged-XXXXXX") || {
+        purge "$candidate"
+        error "Failed to create staging area"
+        return 1
+    }
+    temp_register "$staged"
+
+    if ! cp -a "$candidate/repo/.git/." "$staged/" 2>/dev/null; then
+        purge "$candidate" "$staged"
+        error "Failed to stage git metadata"
+        return 1
+    fi
+
+    # Preserve the original .git so every failure path can roll back.
+    # NOTE: deliberately NOT registered with temp_register — it holds the
+    # user's original history and must survive an interruption. The next
+    # run's clean_repair_artifacts sweeps it, and the pre-repair backup
+    # above is the ultimate safety net.
+    if [[ -d "$VAULT/.git" ]]; then
+        old_holder=$(mktemp -d "$VAULT/.git-old-XXXXXX") || {
+            purge "$candidate" "$staged"
+            error "Failed to create rollback area"
+            return 1
+        }
+        mv "$VAULT/.git" "$old_holder/git" 2>/dev/null || {
+            purge "$candidate" "$staged" "$old_holder"
+            error "Failed to preserve original .git"
+            return 1
+        }
+    fi
+
+    # Atomic swap. On failure, roll the original .git back into place.
+    if ! mv "$staged" "$VAULT/.git" 2>/dev/null; then
+        [[ -n "$old_holder" ]] && mv "$old_holder/git" "$VAULT/.git" 2>/dev/null
+        purge "$candidate" "$staged" "$old_holder"
+        error "Failed to install repaired .git"
+        return 1
+    fi
+    success "Git metadata replaced atomically"
+
+    configure_repo
+
+    # Restore remote files that are missing locally (never overwrite).
+    # find outputs ABSOLUTE paths rooted at "$candidate/repo", so the
+    # prefix strip below is exact; -print0 keeps newline-safe filenames.
+    # Only regular files are considered — Android shared storage cannot
+    # hold symlinks anyway.
+    if [[ -d "$candidate/repo" ]]; then
+        local restored=0 rel file
+        while IFS= read -r -d '' file; do
+            rel=${file#"$candidate/repo/"}
+            if [[ ! -e "$VAULT/$rel" ]]; then
+                mkdir -p "$VAULT/$(dirname "$rel")"
+                cp "$file" "$VAULT/$rel" 2>/dev/null && restored=$((restored + 1))
+            fi
+        done < <(find "$candidate/repo" -name .git -prune -o -type f -print0 2>/dev/null)
+
+        (( restored > 0 )) && success "Restored $restored missing file(s) from remote"
+    fi
+
+    # Cleanup only AFTER the restore loop has consumed the candidate.
+    purge "$candidate" "$old_holder"
+    log "Repair executed"
+    return 0
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  12. COMMANDS
+# ═════════════════════════════════════════════════════════════════════════════
+
+cmd_sync() {
+    section "Full Synchronization"
+    local pulled=0 pushed=0
+    local backup_path="" counts behind=0 ahead=0
+
+    step "Checking repository state"
+    ensure_safe || return 1
+    ensure_origin || return 1
+    success "Repository is in a safe state"
+
+    if [[ "$SKIP_BACKUP" == "1" ]]; then
+        info "Pre-sync backup skipped (OBS_SKIP_BACKUP=1)"
+    else
+        step "Creating pre-sync backup"
+        backup_path=$(make_backup "pre-sync") || return 1
+        prune_backups
+        success "Backup: ${backup_path##*/}"
+    fi
+
+    step "Committing local changes"
+    commit_changes "chore(sync)" || return 1
+
+    step "Fetching remote state"
+    if ! net fetch --quiet origin 2>/dev/null; then
+        error "Fetch failed — check network connection and credentials"
+        return 1
+    fi
+
+    if remote_branch_exists; then
+        if counts=$(g rev-list --left-right --count "origin/$BRANCH...HEAD" 2>/dev/null); then
+            read -r behind ahead <<< "$counts"
+        fi
+        if (( behind > 0 )); then
+            step "Rebasing onto origin/$BRANCH ($behind remote commit(s))"
+            rebase_onto_remote || return 1
+            pulled=$behind
+            success "Integrated $behind remote commit(s)"
+        else
+            info "Remote has no new commits"
+        fi
+    else
+        info "Remote branch '$BRANCH' not found — the next push will create it"
+    fi
+
+    step "Pushing to origin/$BRANCH"
+    if remote_branch_exists; then
+        ahead=$(g rev-list --count "origin/$BRANCH..HEAD" 2>/dev/null) || ahead=0
+    else
+        ahead=$(g rev-list --count HEAD 2>/dev/null) || ahead=0
+    fi
+
+    if (( ahead == 0 )); then
+        info "Nothing to push — already up to date"
+    else
+        local -a push_args=(origin "$BRANCH")
+        remote_branch_exists || push_args=(-u origin "$BRANCH")
+
+        if net push --quiet "${push_args[@]}" 2>/dev/null; then
+            pushed=$ahead
+            success "Pushed $ahead commit(s)"
+        else
+            error "Push failed — local commits are preserved"
+            warn "Check network/credentials, then retry with: ob-sync push"
+            return 1
+        fi
+    fi
+
+    # Lightweight housekeeping (a no-op unless the repository has grown).
+    g gc --auto --quiet >/dev/null 2>&1 || :
+
+    mkdir -p "$BACKUP_DIR" 2>/dev/null || :
+    date '+%F %T' > "$STATE_FILE" 2>/dev/null || :
+
+    log "Sync OK — pulled=$pulled pushed=$pushed"
+    echo
+    success "Sync complete — $pulled commit(s) in, $pushed commit(s) out"
+    return 0
+}
+
+cmd_pull() {
+    section "Pull"
+    local behind
+
+    step "Checking repository state"
+    ensure_safe || return 1
+    ensure_origin || return 1
+
+    step "Committing local changes"
+    commit_changes "chore(pull)" || return 1
+
+    step "Fetching remote state"
+    net fetch --quiet origin 2>/dev/null || { error "Fetch failed"; return 1; }
+
+    if ! remote_branch_exists; then
+        info "Remote branch '$BRANCH' not found — nothing to pull"
+        return 0
+    fi
+
+    behind=$(g rev-list --count "HEAD..origin/$BRANCH" 2>/dev/null) || behind=0
+    if (( behind == 0 )); then
+        success "Already up to date"
+        return 0
+    fi
+
+    step "Rebasing onto origin/$BRANCH ($behind remote commit(s))"
+    rebase_onto_remote || return 1
+    success "Integrated $behind remote commit(s)"
+    return 0
+}
+
+cmd_push() {
+    section "Push"
+    local ahead
+
+    step "Checking repository state"
+    ensure_safe || return 1
+    ensure_origin || return 1
+
+    step "Committing local changes"
+    commit_changes "chore(push)" || return 1
+
+    step "Pushing to origin/$BRANCH"
+    if remote_branch_exists; then
+        ahead=$(g rev-list --count "origin/$BRANCH..HEAD" 2>/dev/null) || ahead=0
+    else
+        ahead=$(g rev-list --count HEAD 2>/dev/null) || ahead=0
+    fi
+
+    if (( ahead == 0 )); then
+        info "Nothing to push — already up to date"
+        return 0
+    fi
+
+    local -a push_args=(origin "$BRANCH")
+    remote_branch_exists || push_args=(-u origin "$BRANCH")
+
+    if net push --quiet "${push_args[@]}" 2>/dev/null; then
+        success "Pushed $ahead commit(s)"
+        return 0
+    fi
+
+    error "Push failed — check network connection and credentials"
+    return 1
+}
+
+##
+# One-shot daily routine: a single verified backup followed by a full
+# sync. The sync reuses the backup (its own pre-sync backup is skipped).
+##
+cmd_quick() {
+    section "Quick Mode"
+    info "One verified backup, then a full sync"
+
+    local path
+    path=$(make_backup "quick") || return 1
+    prune_backups
+    success "Backup: ${path##*/}"
+
+    local prev_skip=$SKIP_BACKUP
+    SKIP_BACKUP=1
+    cmd_sync
+    local rc=$?
+    SKIP_BACKUP=$prev_skip
+    return $rc
+}
+
+cmd_backup() {
+    section "Backup"
+
+    step "Creating verified backup"
+    local path
+    path=$(make_backup "manual") || return 1
+    prune_backups
+
+    success "Backup created and verified"
+    kv "File" "${path##*/}"
+    kv "Size" "$(du -h "$path" 2>/dev/null | cut -f1)"
+    kv "Scope" "Full vault (including .git)"
+    kv "Location" "$BACKUP_DIR"
+    return 0
+}
+
+cmd_verify() {
+    section "Backup Verification"
+
+    local -a archives=()
+    local a
+    while IFS= read -r -d '' a; do
+        archives+=("$a")
+    done < <(find "$BACKUP_DIR" -maxdepth 1 -name '*.tar.gz' -type f -print0 2>/dev/null \
+                | sort -z)
+
+    if (( ${#archives[@]} == 0 )); then
+        info "No backups found in: $BACKUP_DIR"
+        return 0
+    fi
+
+    local total=${#archives[@]} passed=0 failed=0
+    local archive name ok
+
+    for archive in "${archives[@]}"; do
+        name=${archive##*/}
+        ok=1
+
+        # Checksum audit (sidecar-verified via the portability helper).
+        verify_sidecar "$archive" || ok=0
+
+        # Full stream read — catches truncated archives.
+        tar -tzf "$archive" >/dev/null 2>&1 || ok=0
+
+        if (( ok )); then
+            printf '  %s[ OK ]%s %s\n' "$C_BRIGHT_GREEN" "$C_RESET" "$name"
+            passed=$((passed + 1))
+        else
+            printf '  %s[FAIL]%s %s\n' "$C_BRIGHT_RED" "$C_RESET" "$name"
+            failed=$((failed + 1))
+        fi
+    done
+
+    echo
+    if (( failed == 0 )); then
+        success "All $total backup(s) passed verification"
+        return 0
+    fi
+
+    error "$failed of $total backup(s) failed verification"
+    return 1
+}
+
+cmd_restore() {
+    section "Restore Vault"
+
+    # Newest first, by embedded timestamp — NOT by raw filename order
+    # (prefixes would otherwise shadow chronology; see list_backups_desc).
+    local -a archives=()
+    local a
+    while IFS= read -r -d '' a; do
+        archives+=("$a")
+    done < <(list_backups_desc)
+
+    if (( ${#archives[@]} == 0 )); then
+        error "No backups found in: $BACKUP_DIR"
+        return 1
+    fi
+
+    # Resolve the target: interactive pick, 'latest', a name, or a full path.
+    local target="${1:-}"
+    local archive=""
+
+    if [[ -z "$target" ]]; then
+        # A destructive restore must never run unattended: without an
+        # explicit target or explicit consent, refuse instead of guessing.
+        if (( ! ASSUME_YES )); then
+            if [[ ! -t 0 ]]; then
+                error "Non-interactive session — specify a target: ob-sync restore latest | <file>"
+                return 1
+            fi
+            echo "  Available backups (newest first):"
+            local i=1
+            for a in "${archives[@]}"; do
+                printf '    %s%2d)%s %s %s(%s)%s\n' \
+                    "$C_CYAN" "$i" "$C_RESET" "${a##*/}" \
+                    "$C_DIM" "$(du -h "$a" 2>/dev/null | cut -f1)" "$C_RESET"
+                i=$((i + 1))
+            done
+            echo
+            local choice=""
+            read -r -p "  Select backup [1]: " choice || :
+            choice=${choice:-1}
+            if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#archives[@]} )); then
+                archive=${archives[choice - 1]}
+            else
+                error "Invalid selection: $choice"
+                return 1
+            fi
+        else
+            archive=${archives[0]}
+            info "No backup specified — using the latest"
+        fi
+    elif [[ "$target" == "latest" ]]; then
+        archive=${archives[0]}
+    elif [[ -f "$target" ]]; then
+        archive=$target
+    elif [[ -f "$BACKUP_DIR/$target" ]]; then
+        archive="$BACKUP_DIR/$target"
+    else
+        error "Backup not found: $target"
+        return 1
+    fi
+
+    step "Verifying archive integrity"
+    if ! tar -tzf "$archive" >/dev/null 2>&1; then
+        error "Archive is unreadable or corrupt"
+        return 1
+    fi
+    if ! verify_sidecar "$archive"; then
+        error "Checksum mismatch — archive may be corrupted"
+        return 1
+    fi
+    success "Archive verified: ${archive##*/}"
+
+    # Tar-slip protection: audit every member BEFORE anything is written
+    # to disk. Foreign or tampered archives are refused here.
+    step "Auditing archive members"
+    check_archive_safe "$archive" || return 1
+    success "All members are safe to extract"
+
+    warn "This will REPLACE the current vault contents"
+    local answer=""
+    if (( ! ASSUME_YES )); then
+        read -r -p "  Continue? [y/N]: " answer || :
+        [[ "$answer" =~ ^[Yy]$ ]] || { info "Cancelled"; return 0; }
+    fi
+
+    if [[ -d "$VAULT" ]]; then
+        step "Creating safety backup of the current vault"
+        local safety
+        safety=$(make_backup "pre-restore") || return 1
+        prune_backups
+        success "Safety backup: ${safety##*/}"
+    fi
+
+    step "Extracting archive"
+    local parent staging
+    parent=$(dirname "$VAULT")
+    mkdir -p "$parent" 2>/dev/null || :
+    staging=$(mktemp -d "$parent/.obsidian-restore-XXXXXX") || {
+        error "Failed to create staging area in: $parent"
+        return 1
+    }
+    temp_register "$staging"
+
+    if ! tar -xzf "$archive" -C "$staging" 2>/dev/null; then
+        rm -rf -- "$staging"
+        error "Extraction failed"
+        return 1
+    fi
+
+    # Defence in depth: even though check_archive_safe refuses symlinks,
+    # scan the result too, in case a listing trick evaded line-based
+    # parsing (e.g. a filename containing a newline).
+    if [[ -n "$(find "$staging" -type l -print -quit 2>/dev/null)" ]]; then
+        rm -rf -- "$staging"
+        error "A symlink materialized during extraction — restore refused"
+        return 1
+    fi
+
+    step "Swapping vault into place"
+    local old=""
+    if [[ -d "$VAULT" ]]; then
+        old="${VAULT}.pre-restore-$(date '+%Y%m%d-%H%M%S')"
+        mv "$VAULT" "$old" 2>/dev/null || {
+            rm -rf -- "$staging"
+            error "Failed to move the current vault aside"
+            return 1
+        }
+    fi
+
+    if mv "$staging" "$VAULT" 2>/dev/null; then
+        success "Vault restored from: ${archive##*/}"
+    else
+        error "Failed to install restored vault"
+        [[ -n "$old" ]] && mv "$old" "$VAULT" 2>/dev/null
+        rm -rf -- "$staging"
+        return 1
+    fi
+
+    if [[ -n "$old" ]]; then
+        info "Previous vault preserved at: $old"
+        info "Delete it manually after verifying the restore"
+    fi
+
+    log "Vault restored from: ${archive##*/}"
+    return 0
+}
+
+cmd_repair() {
+    section "Repository Repair"
+
+    warn "This rebuilds the git metadata from the remote"
+    info "Vault files are never modified or deleted"
+    info "A verified backup is created before anything changes"
+    echo
+
+    if (( ! ASSUME_YES )) && [[ "${1:-}" != "-y" ]]; then
+        # A destructive repair must never run unattended: without a
+        # terminal to confirm on, default to cancelling.
+        if [[ ! -t 0 ]]; then
+            info "Non-interactive session — rerun with: ob-sync repair -y"
+            return 0
+        fi
+        local answer=""
+        read -r -p "  Continue? [y/N]: " answer || :
+        [[ "$answer" =~ ^[Yy]$ ]] || { info "Cancelled"; return 0; }
+    fi
+
+    # Remove artifacts from any previously interrupted repair attempt.
+    rm -rf -- "$BACKUP_DIR"/repair-* 2>/dev/null
+    clean_repair_artifacts
+
+    step "Preparing a verified clone (non-destructive)"
+    local candidate
+    if ! candidate=$(prepare_repair); then
+        return 1
+    fi
+    success "Candidate repository is ready"
+
+    step "Executing atomic metadata swap"
+    execute_repair "$candidate" || return 1
+
+    step "Validating repaired repository"
+    if check_repo_safe; then
+        configure_repo
+        ensure_identity
+        success "Repository verified and configured"
+        info "Commits: $(g rev-list --count HEAD 2>/dev/null || printf '?')"
+        info "Pending differences will be committed on the next sync"
+        log "Repair completed"
+        return 0
+    fi
+
+    error "Post-repair validation failed — inspect: $VAULT/.git"
+    return 1
+}
+
+##
+# Pure information command: never hard-fails. Each section degrades
+# gracefully — the vault and backup overviews render even without git
+# installed and even without a vault present.
+##
+cmd_status() {
+    section "Vault Status"
+
+    local has_git=0
+    command -v git >/dev/null 2>&1 && has_git=1
+
+    # ---- Vault section: no git required --------------------------------
+    echo "  ${C_BOLD}${C_CYAN}Vault${C_RESET}"
+    if [[ -d "$VAULT" ]]; then
+        kv "Path" "$VAULT"
+        kv "Notes" "$(find "$VAULT" -name '*.md' -not -path '*/.git/*' 2>/dev/null | wc -l | tr -d ' ')"
+        kv "Size" "$(vault_size)"
+    else
+        kv "Path" "$VAULT"
+        kv "Status" "missing ${C_DIM}(run: ob-sync init)${C_RESET}"
+    fi
+
+    # ---- Git section: degrades gracefully -------------------------------
+    echo
+    echo "  ${C_BOLD}${C_CYAN}Git${C_RESET}"
+    if (( has_git )) && [[ -d "$VAULT/.git" ]]; then
+        kv "Branch" "$(g branch --show-current 2>/dev/null || printf 'unknown')"
+        kv "Remote" "$(g remote get-url origin 2>/dev/null || printf 'not configured')"
+        kv "Changes" "$(g status --porcelain 2>/dev/null | wc -l | tr -d ' ') file(s)"
+        kv "Last commit" "$(g log -1 --format='%h %s (%cr)' 2>/dev/null || printf 'none')"
+
+        local counts behind=0 ahead=0
+        if remote_branch_exists; then
+            if counts=$(g rev-list --left-right --count "origin/$BRANCH...HEAD" 2>/dev/null); then
+                read -r behind ahead <<< "$counts"
+                kv "Behind remote" "$behind commit(s) ${C_DIM}(as of last fetch)${C_RESET}"
+                kv "Ahead of remote" "$ahead commit(s)"
+            fi
+        fi
+    elif [[ -d "$VAULT/.git" ]]; then
+        kv "Repository" "present ${C_DIM}(git not installed — see doctor)${C_RESET}"
+    elif (( has_git )); then
+        kv "Repository" "not initialized ${C_DIM}(run: ob-sync init)${C_RESET}"
+    else
+        kv "Repository" "unknown ${C_DIM}(install git to inspect)${C_RESET}"
+    fi
+
+    # ---- Backups section: no git required -------------------------------
+    echo
+    echo "  ${C_BOLD}${C_CYAN}Backups${C_RESET}"
+    kv "Total" "$(find "$BACKUP_DIR" -maxdepth 1 -name '*.tar.gz' -type f 2>/dev/null | wc -l | tr -d ' ') (retention: $KEEP_BACKUPS)"
+    kv "Location" "$BACKUP_DIR"
+
+    if [[ -f "$STATE_FILE" ]]; then
+        echo
+        kv "Last sync" "$(cat "$STATE_FILE" 2>/dev/null || printf 'unknown')" "$C_MAGENTA"
+    fi
+    return 0
+}
+
+cmd_health() {
+    section "Health Check"
+
+    # Distinguish a missing binary from a broken repository: without this
+    # guard, every git failure below would be misreported as corruption.
+    if ! command -v git >/dev/null 2>&1; then
+        error "git is not installed"
+        warn "Install it with: $(install_hint)"
+        return 1
+    fi
+
+    step "Checking git repository"
+    if [[ -d "$VAULT/.git" ]]; then
+        success "Repository exists"
+    else
+        error "No git repository found"
+        warn "Fix: ob-sync init  (or  ob-sync repair)"
+        return 1
+    fi
+
+    step "Verifying HEAD reference"
+    if g rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+        success "HEAD is valid"
+    else
+        error "HEAD is corrupted"
+        warn "Fix: ob-sync repair"
+        return 1
+    fi
+
+    step "Checking object database"
+    if g fsck --connectivity-only --no-progress >/dev/null 2>&1; then
+        success "Object database is intact"
+    else
+        error "Repository corruption detected"
+        warn "Fix: ob-sync repair"
+        return 1
+    fi
+
+    step "Checking operational state"
+    local issues=0
+    if check_repo_safe; then
+        success "Repository is in a safe state"
+    else
+        warn "Repository is not in a safe state"
+        warn "Fix: ob-sync sync (auto-recovers) or ob-sync repair"
+        issues=$((issues + 1))
+    fi
+
+    step "Checking remote configuration"
+    if g remote get-url origin >/dev/null 2>&1; then
+        success "Remote 'origin' is configured"
+    else
+        warn "Remote 'origin' is missing"
+        issues=$((issues + 1))
+    fi
+
+    step "Checking git identity"
+    if [[ -n "$(g config user.email 2>/dev/null)" ]]; then
+        success "Git identity is configured"
+    else
+        warn "No git identity — a fallback will be applied on next commit"
+        issues=$((issues + 1))
+    fi
+
+    echo
+    echo "  ${C_BOLD}${C_GREEN}Statistics${C_RESET}"
+    kv "Commits" "$(g rev-list --count HEAD 2>/dev/null || printf '0')"
+    kv "Tracked files" "$(g ls-files 2>/dev/null | wc -l | tr -d ' ')"
+    kv ".git size" "$(du -sh "$VAULT/.git" 2>/dev/null | cut -f1)"
+
+    local avail
+    avail=$(df -Ph "$HOME" 2>/dev/null | awk 'NR==2 {print $4}')
+    kv "Free storage" "${avail:-unknown}"
+
+    echo
+    if (( issues == 0 )); then
+        success "All checks passed"
+        return 0
+    fi
+    warn "$issues issue(s) detected — see above"
+    return 1
+}
+
+##
+# Audit the vault for hygiene problems: untitled notes, empty notes,
+# oversized files and attachments not referenced by any note.
+# With --fix, orphaned attachments are moved into $ATTACH_DIR (name
+# collisions are skipped, never overwritten).
+##
+cmd_organize() {
+    section "Vault Organization"
+
+    local fix=0
+    [[ "${1:-}" == "--fix" ]] && fix=1
+
+    # Attachment extensions recognized during the scan.
+    local -a attach_exts=(png jpg jpeg gif webp svg bmp pdf mp3 wav ogg m4a mp4 mov mkv avi zip)
+
+    step "Scanning vault contents"
+    local notes=0 attachments=0 others=0
+    local -a attach_files=()
+    local f ext e is_attach
+
+    while IFS= read -r -d '' f; do
+        f=${f#"$VAULT"/}
+        if [[ "$f" == *.md ]]; then
+            notes=$((notes + 1))
+        else
+            ext=${f##*.}
+            ext=${ext,,}
+            is_attach=0
+            for e in "${attach_exts[@]}"; do
+                [[ "$ext" == "$e" ]] && { is_attach=1; break; }
+            done
+            if (( is_attach )); then
+                attachments=$((attachments + 1))
+                attach_files+=("$f")
+            else
+                others=$((others + 1))
+            fi
+        fi
+    done < <(find "$VAULT" \( -name .git -o -name .obsidian -o -name .trash \) \
+                -prune -o -type f -print0 2>/dev/null)
+
+    kv "Notes" "$notes"
+    kv "Attachments" "$attachments"
+    kv "Other files" "$others"
+
+    step "Scanning for untitled notes"
+    local -a untitled=()
+    while IFS= read -r -d '' f; do
+        untitled+=("${f#"$VAULT"/}")
+    done < <(find "$VAULT" -name 'Untitled*.md' -type f \
+                -not -path '*/.git/*' -not -path '*/.obsidian/*' \
+                -not -path '*/.trash/*' -print0 2>/dev/null)
+
+    if (( ${#untitled[@]} )); then
+        # Report only: renaming outside Obsidian would break backlinks.
+        warn "${#untitled[@]} untitled note(s) — rename inside Obsidian to keep backlinks intact"
+        for f in "${untitled[@]}"; do
+            printf '      %s%s%s\n' "$C_DIM" "$f" "$C_RESET"
+        done
+    else
+        success "No untitled notes"
+    fi
+
+    step "Scanning for empty notes"
+    local -a empty_notes=()
+    while IFS= read -r -d '' f; do
+        empty_notes+=("${f#"$VAULT"/}")
+    done < <(find "$VAULT" -name '*.md' -type f -size -10c \
+                -not -path '*/.git/*' -not -path '*/.obsidian/*' -print0 2>/dev/null)
+
+    if (( ${#empty_notes[@]} )); then
+        warn "${#empty_notes[@]} empty or near-empty note(s) found"
+        for f in "${empty_notes[@]}"; do
+            printf '      %s%s%s\n' "$C_DIM" "$f" "$C_RESET"
+        done
+    else
+        success "No empty notes"
+    fi
+
+    step "Scanning for oversized files (> 5 MB)"
+    local -a oversized=()
+    while IFS= read -r -d '' f; do
+        oversized+=("$(du -h "$f" 2>/dev/null | cut -f1)  ${f#"$VAULT"/}")
+    done < <(find "$VAULT" -type f -size +5M \
+                -not -path '*/.git/*' -not -path '*/.obsidian/*' -print0 2>/dev/null)
+
+    if (( ${#oversized[@]} )); then
+        warn "${#oversized[@]} large file(s) — consider excluding media from the repo"
+        for f in "${oversized[@]}"; do
+            printf '      %s%s%s\n' "$C_DIM" "$f" "$C_RESET"
+        done
+    else
+        success "No oversized files"
+    fi
+
+    step "Scanning for orphaned attachments"
+    local refs
+    local -a orphans=()
+    refs=$(mktemp) || { error "Failed to create temp file"; return 1; }
+    temp_register "$refs"
+
+    # Index every attachment-like filename mentioned inside any note
+    # (covers both [[wiki]] embeds and standard [markdown](links)).
+    grep -rhoE --include='*.md' --exclude-dir=.git \
+        '[A-Za-z0-9][A-Za-z0-9 ._()-]*\.(png|jpe?g|gif|webp|svg|bmp|pdf|mp3|wav|ogg|m4a|mp4|mov|mkv|avi|zip)' \
+        "$VAULT" 2>/dev/null | sort -u > "$refs"
+
+    for f in "${attach_files[@]}"; do
+        grep -qiFx -- "${f##*/}" "$refs" || orphans+=("$f")
+    done
+    rm -f -- "$refs"
+
+    if (( ${#orphans[@]} == 0 )); then
+        success "No orphaned attachments"
+        return 0
+    fi
+
+    warn "${#orphans[@]} orphaned attachment(s) — not referenced by any note"
+    for f in "${orphans[@]}"; do
+        printf '      %s%s%s\n' "$C_DIM" "$f" "$C_RESET"
+    done
+
+    if (( ! fix )); then
+        echo
+        info "Run 'ob-sync organize --fix' to move them into: $ATTACH_DIR/"
+        return 0
+    fi
+
+    step "Moving orphans into $ATTACH_DIR"
+    mkdir -p "$VAULT/$ATTACH_DIR" \
+        || { error "Cannot create: $VAULT/$ATTACH_DIR"; return 1; }
+
+    local moved=0 dest name
+    for f in "${orphans[@]}"; do
+        [[ "$f" == "$ATTACH_DIR"/* ]] && continue        # already in place
+        name=${f##*/}
+        dest="$VAULT/$ATTACH_DIR/$name"
+        if [[ -e "$dest" ]]; then
+            warn "Skipped (name collision): $name"
+            continue
+        fi
+        mv "$VAULT/$f" "$dest" 2>/dev/null && moved=$((moved + 1))
+    done
+
+    success "Moved $moved orphan(s) into $ATTACH_DIR/"
+    info "Run 'ob-sync sync' to commit the reorganization"
+    return 0
+}
+
+cmd_doctor() {
+    section "Diagnostics"
+
+    step "Detecting platform"
+    if (( IS_TERMUX )); then
+        success "Termux ${TERMUX_VERSION:-} (Android)"
+    else
+        success "Desktop (${OSTYPE:-unknown})"
+    fi
+
+    step "Checking required tools"
+    local -a required=(git tar find grep)
+    local -a missing=()
+    local tool
+    for tool in "${required[@]}"; do
+        command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+    done
+    # One hashing tool is enough — GNU sha256sum or BSD/macOS shasum.
+    command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
+        || missing+=("sha256sum|shasum")
+    if (( ${#missing[@]} == 0 )); then
+        success "All required tools are available"
+    else
+        error "Missing tools: ${missing[*]}"
+        warn "Install with: $(install_hint)"
+        return 1
+    fi
+
+    step "Checking storage access"
+    if (( IS_TERMUX )); then
+        if [[ -d "$HOME/storage/shared" ]]; then
+            success "Shared storage is mounted"
+        else
+            error "Shared storage is not available"
+            warn "Run: termux-setup-storage"
+            return 1
+        fi
+    else
+        success "Native filesystem — no storage permission required"
+    fi
+
+    step "Checking vault access"
+    if [[ -d "$VAULT" ]]; then
+        success "Vault found"
+        if [[ -w "$VAULT" ]]; then
+            success "Vault is writable"
+        else
+            error "Vault is not writable: $VAULT"
+            return 1
+        fi
+    else
+        warn "Vault not found: $VAULT"
+        warn "Initialize it with: ob-sync init"
+    fi
+
+    step "Checking backup directory"
+    if mkdir -p "$BACKUP_DIR" 2>/dev/null && [[ -w "$BACKUP_DIR" ]]; then
+        success "Backup directory is ready"
+    else
+        error "Backup directory is not writable: $BACKUP_DIR"
+        return 1
+    fi
+
+    step "Checking remote connectivity"
+    if run_with_timeout git ls-remote --exit-code "$REMOTE" HEAD >/dev/null 2>&1; then
+        success "Remote is reachable"
+    else
+        warn "Remote is unreachable — network down, private repo, or missing credentials"
+        warn "For private repos, authenticate once:"
+        printf '      git config --global credential.helper store\n'
+        printf '      git ls-remote %s   (enter token — it will be saved)\n' "$REMOTE"
+    fi
+
+    step "Checking remote default branch"
+    local default_branch
+    default_branch=$(run_with_timeout git ls-remote --symref "$REMOTE" HEAD 2>/dev/null \
+        | awk '/^ref:/ { sub(/refs\/heads\//, "", $2); print $2; exit }')
+    if [[ -n "$default_branch" ]]; then
+        if [[ "$default_branch" == "$BRANCH" ]]; then
+            success "Remote default branch '$BRANCH' matches configuration"
+        else
+            warn "Remote default branch is '$default_branch', but OBS_BRANCH='$BRANCH'"
+            warn "Fix: export OBS_BRANCH=$default_branch"
+        fi
+    fi
+
+    step "Checking network watchdog"
+    if (( HAS_TIMEOUT )); then
+        success "Network watchdog active (${GIT_TIMEOUT}s timeout)"
+    else
+        warn "Network watchdog disabled — 'timeout' not found"
+        warn "Remote operations may hang on a dead connection"
+        [[ "${OSTYPE:-}" == darwin* ]] && warn "Fix: brew install coreutils"
+    fi
+
+    step "Checking free storage"
+    local avail
+    avail=$(df -Ph "$HOME" 2>/dev/null | awk 'NR==2 {print $4}')
+    kv "Free space (\$HOME)" "${avail:-unknown}"
+
+    echo
+    success "Diagnostics complete"
+    return 0
+}
+
+cmd_init() {
+    section "First-Time Setup"
+
+    step "Checking environment"
+    command -v git >/dev/null 2>&1 \
+        || { error "git is not installed"; warn "Install it with: $(install_hint)"; return 1; }
+
+    # Storage permission is a Termux-only concept.
+    if (( IS_TERMUX )) && [[ ! -d "$HOME/storage/shared" ]]; then
+        warn "Termux storage permission is missing"
+        command -v termux-setup-storage >/dev/null 2>&1 || {
+            error "termux-setup-storage not found — is this really Termux?"
+            return 1
+        }
+        local answer=""
+        if (( ! ASSUME_YES )) && [[ -t 0 ]]; then
+            read -r -p "  Run termux-setup-storage now? [Y/n]: " answer || :
+        fi
+        if [[ ! "$answer" =~ ^[Nn]$ ]]; then
+            termux-setup-storage || { error "Storage setup failed"; return 1; }
+        else
+            error "Storage permission is required — cancelled"
+            return 1
+        fi
+    fi
+
+    if [[ -d "$VAULT/.git" ]]; then
+        info "Vault already has a git repository — applying configuration only"
+    elif [[ -d "$VAULT" ]]; then
+        # The vault exists (typically created by the Obsidian app) but has
+        # no history: initialize git and link it to the remote WITHOUT
+        # touching any working file.
+        step "Linking existing vault to remote"
+        git -C "$VAULT" init -q 2>/dev/null || { error "git init failed"; return 1; }
+        git -C "$VAULT" symbolic-ref HEAD "refs/heads/$BRANCH"
+
+        g remote add origin "$REMOTE" 2>/dev/null \
+            || g remote set-url origin "$REMOTE" 2>/dev/null \
+            || { error "Failed to configure remote"; return 1; }
+
+        info "Fetching remote history"
+        if net fetch --quiet origin 2>/dev/null && remote_branch_exists; then
+            # Point the branch at the remote head; local edits simply show
+            # up as pending changes for the next sync.
+            if g reset --mixed "origin/$BRANCH" >/dev/null 2>&1; then
+                # Materialize remote files that are missing locally —
+                # additive only, existing files are never overwritten.
+                # Without this, the first sync would commit their deletion.
+                local absent
+                absent=$(g ls-files --deleted 2>/dev/null | wc -l | tr -d ' ')
+                if (( absent > 0 )); then
+                    # NOTE: no `xargs -r` — it is GNU-only. The guard above
+                    # already guarantees non-empty input.
+                    g ls-files --deleted -z 2>/dev/null \
+                        | xargs -0 git -C "$VAULT" checkout -- 2>/dev/null || :
+                    info "Restored $absent file(s) that existed only on the remote"
+                fi
+                success "Linked existing files to origin/$BRANCH"
+            else
+                warn "Could not align with remote history — next sync starts fresh"
+            fi
+        else
+            info "Remote branch not found — this vault will become the source of truth"
+        fi
+    else
+        step "Cloning vault from remote"
+        mkdir -p "$(dirname "$VAULT")" \
+            || { error "Cannot create vault parent directory"; return 1; }
+
+        if ! run_with_timeout git clone --quiet --single-branch --branch "$BRANCH" \
+                "$REMOTE" "$VAULT" 2>/dev/null; then
+            warn "Clone of branch '$BRANCH' failed — trying the default branch"
+            rm -rf -- "$VAULT"
+            if ! run_with_timeout git clone --quiet "$REMOTE" "$VAULT" 2>/dev/null; then
+                rm -rf -- "$VAULT"
+                error "Clone failed — check URL, network and credentials"
+                return 1
+            fi
+            local detected
+            detected=$(git -C "$VAULT" branch --show-current 2>/dev/null)
+            if [[ -n "$detected" && "$detected" != "$BRANCH" && -z "${OBS_BRANCH:-}" ]]; then
+                info "Adopting remote default branch: $detected"
+                BRANCH="$detected"
+            fi
+        fi
+        success "Vault cloned"
+    fi
+
+    step "Applying git configuration for shared storage"
+    configure_repo
+    ensure_identity
+    success "Configuration applied"
+
+    step "Installing recommended .gitignore"
+    if [[ -f "$VAULT/.gitignore" ]]; then
+        info ".gitignore already exists — left untouched"
+    else
+        cat > "$VAULT/.gitignore" <<'EOF' || { error "Failed to write .gitignore"; return 1; }
+# Obsidian — volatile local state, keep out of version control
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+.trash/
+
+# ob-sync repair staging artifacts
+.git-staged-*
+.git-old-*
+.git-original-*
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+EOF
+        success "Created .gitignore"
+    fi
+
+    echo
+    success "Setup complete"
+    kv "Vault" "$VAULT"
+    kv "Remote" "$REMOTE"
+    kv "Branch" "$BRANCH"
+    echo
+    info "Next step: ob-sync sync"
+    log "Initialization complete"
+    return 0
+}
+
+cmd_log() {
+    section "Recent Activity"
+
+    local lines="${1:-20}"
+    [[ "$lines" =~ ^[0-9]+$ ]] || lines=20
+
+    if [[ -z "$LOG_FILE" || ! -f "$LOG_FILE" ]]; then
+        info "No log file available (logging may be disabled)"
+        return 0
+    fi
+
+    tail -n "$lines" "$LOG_FILE" 2>/dev/null || { error "Cannot read log file"; return 1; }
+    return 0
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  13. INTERACTIVE MENU (mobile-friendly)
+# ═════════════════════════════════════════════════════════════════════════════
+
+##
+# Draw the menu screen with a live status summary.
+##
+show_menu() {
+    # Clear the screen; fall back to clear(1) if the escape codes fail.
+    printf '\033[2J\033[H' 2>/dev/null || clear 2>/dev/null || :
+
+    local branch="-" changes="0"
+    if command -v git >/dev/null 2>&1 && [[ -d "$VAULT/.git" ]]; then
+        branch=$(g branch --show-current 2>/dev/null) || branch="-"
+        [[ -n "$branch" ]] || branch="-"
+        changes=$(g status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+        [[ -n "$changes" ]] || changes="0"
+    fi
+
+    echo
+    printf '  %s%s──────────────────────────────────────────%s\n' "$C_BRIGHT_CYAN" "$C_BOLD" "$C_RESET"
+    printf '  %s%s    OBSIDIAN SYNC TOOL  ·  v%s%s\n' "$C_BRIGHT_CYAN" "$C_BOLD" "$VERSION" "$C_RESET"
+    printf '  %s%s──────────────────────────────────────────%s\n' "$C_BRIGHT_CYAN" "$C_BOLD" "$C_RESET"
+    echo
+    printf '  %sVault:%s   %s\n' "$C_CYAN" "$C_RESET" "$VAULT"
+    printf '  %sBranch:%s  %s\n' "$C_CYAN" "$C_RESET" "$branch"
+    printf '  %sChanges:%s %s\n' "$C_CYAN" "$C_RESET" "$changes"
+    if [[ -f "$STATE_FILE" ]]; then
+        printf '  %sLast:%s    %s\n' "$C_CYAN" "$C_RESET" "$(cat "$STATE_FILE" 2>/dev/null || printf '-')"
+    fi
+    echo
+    printf '  %sMENU%s\n' "$C_BOLD" "$C_RESET"
+    printf '  %s------------------------------------------%s\n' "$C_DIM" "$C_RESET"
+    echo
+    printf '  %s1)%s Sync      %sbackup + rebase + push%s\n'       "$C_BRIGHT_GREEN"   "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s2)%s Pull      %sintegrate remote changes%s\n'     "$C_BRIGHT_CYAN"    "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s3)%s Push      %spublish local changes%s\n'        "$C_BRIGHT_BLUE"    "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s4)%s Backup    %screate a verified backup%s\n'     "$C_BRIGHT_MAGENTA" "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s5)%s Restore   %sroll back from a backup%s\n'      "$C_BRIGHT_YELLOW"  "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s6)%s Verify    %scheck backup integrity%s\n'       "$C_BRIGHT_WHITE"   "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s7)%s Repair    %srebuild git metadata%s\n'         "$C_BRIGHT_RED"     "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s8)%s Organize  %saudit notes & attachments%s\n'    "$C_BRIGHT_CYAN"    "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s9)%s Status    %svault overview%s\n'               "$C_BRIGHT_GREEN"   "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s10)%s Health   %sgit integrity check%s\n'          "$C_BRIGHT_BLUE"    "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s11)%s Doctor   %sdiagnose environment%s\n'         "$C_BRIGHT_MAGENTA" "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s12)%s Quick    %sbackup + sync, one shot%s\n'      "$C_BRIGHT_CYAN"    "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s0)%s Exit     %squit the tool%s\n'                 "$C_BRIGHT_RED"     "$C_RESET" "$C_DIM" "$C_RESET"
+    echo
+    printf '  %s------------------------------------------%s\n' "$C_DIM" "$C_RESET"
+    echo
+}
+
+##
+# Main menu loop. Every action goes through the shared dispatcher, so
+# validation and locking behave exactly like CLI mode. The lock is
+# acquired and released around each individual operation.
+##
+main_menu() {
+    while true; do
+        show_menu
+        local choice=""
+        read -r -p "  Select an option [0-12]: " choice || { echo; exit 0; }
+
+        case "$choice" in
+            1)  dispatch sync ;;
+            2)  dispatch pull ;;
+            3)  dispatch push ;;
+            4)  dispatch backup ;;
+            5)  dispatch restore ;;
+            6)  dispatch verify ;;
+            7)  dispatch repair ;;
+            8)  dispatch organize ;;
+            9)  dispatch status ;;
+            10) dispatch health ;;
+            11) dispatch doctor ;;
+            12) dispatch quick ;;
+            0)  echo; success "Goodbye!"; echo; exit 0 ;;
+            *)  error "Invalid choice: $choice"; sleep 1; continue ;;
+        esac
+
+        echo
+        read -r -p "  Press Enter to return to the menu..." _ || exit 0
+    done
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  14. HELP & VERSION
+# ═════════════════════════════════════════════════════════════════════════════
+
+cmd_help() {
+    cat <<EOF
+  ob-sync ${VERSION} — Obsidian Git Sync for Termux, Linux & macOS
+
+  USAGE
+    ob-sync                     Interactive menu (default on a terminal)
+    ob-sync [options] <command> [args]
+
+  COMMANDS
+    sync                  Full sync: check → backup → commit → fetch → rebase → push
+    pull                  Commit local changes, then integrate remote updates
+    push                  Commit local changes, then push to the remote
+    quick                 Verified backup + full sync in one step
+    backup                Create and verify a full vault backup
+    restore [target]      Restore from an audited backup ('latest', name, or path)
+    verify                Verify the integrity of every stored backup
+    repair                Rebuild git metadata from remote (files preserved)
+    organize [--fix]      Audit empty notes, big files & orphaned attachments
+    status                Show vault, git and backup overview (works without git)
+    health                Deep repository integrity check
+    doctor                Diagnose platform, tools, storage, remote and watchdog
+    init                  First-time setup: clone or adopt an existing vault
+    menu                  Launch the interactive menu
+    log [n]               Show the last n log entries (default: 20)
+    help                  Show this help
+    version               Show version information
+
+  OPTIONS
+    -y, --yes             Assume "yes" for all interactive prompts
+    -n, --no-color        Disable colored output (or set NO_COLOR=1)
+    -h, --help            Show this help
+    -v, --version         Show version information
+
+  ENVIRONMENT
+    OBS_VAULT             Vault path (default: ~/storage/shared/Documents/<vault> on
+                          Termux, ~/Documents/<vault> on desktop)
+    OBS_REMOTE            Remote repository URL
+    OBS_BRANCH            Tracked branch (default: main)
+    OBS_BACKUP_DIR        Backup directory (default: ~/obsidian-backups)
+    OBS_KEEP_BACKUPS      Backups to retain (default: 10; 0 = keep all)
+    OBS_LOG               Log file path (default: ~/ob-sync.log; empty = off)
+    OBS_GIT_TIMEOUT       Network git timeout in seconds (default: 120; 0 = none)
+    OBS_SKIP_BACKUP       Set to 1 to skip the pre-sync safety backup
+    OBS_ATTACH_DIR        Destination folder for 'organize --fix' (default: Attachments)
+
+  EXAMPLES
+    ob-sync               Open the interactive menu
+    ob-sync sync          Full sync from a script or cron job
+    ob-sync -y repair     Repair without the confirmation prompt
+    ob-sync restore latest    Roll the vault back to the newest backup
+    ob-sync organize --fix    Move unreferenced attachments into Attachments/
+    OBS_SKIP_BACKUP=1 ob-sync sync    Fast sync without the safety backup
+
+  EXIT CODES
+    0   success          1   operation failed          2   another instance running
+EOF
+}
+
+cmd_version() {
+    printf 'ob-sync %s — Obsidian Git Sync for Termux, Linux & macOS\n' "$VERSION"
+    printf 'Author: Soroush Chegini · MIT License\n'
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  15. DISPATCHER & ENTRY POINT
+# ═════════════════════════════════════════════════════════════════════════════
+
+require_git() {
+    if command -v git >/dev/null 2>&1; then
+        return 0
+    fi
+    error "git is not installed"
+    warn "Install it with: $(install_hint)"
+    return 1
+}
+
+require_vault() {
+    [[ -d "$VAULT" ]] \
+        || { error "Vault not found: $VAULT"; warn "Initialize with: ob-sync init"; return 1; }
+    return 0
+}
+
+##
+# Environment sanity pass: verify required tools and resolve the vault to
+# an absolute physical path (a relative OBS_VAULT would make git -C
+# depend on the current working directory — a real footgun).
+##
+setup() {
+    local -a missing=()
+    local dep
+    local -a deps=(git tar find grep sort cut tr wc tail mktemp du xargs dirname)
+    for dep in "${deps[@]}"; do
+        command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
+    done
+    # One hashing tool is enough — GNU sha256sum or BSD/macOS shasum.
+    command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
+        || missing+=("sha256sum|shasum")
+    if (( ${#missing[@]} > 0 )); then
+        error "Missing required commands: ${missing[*]}"
+        warn "Install with: $(install_hint)"
+        return 1
+    fi
+
+    local resolved
+    if resolved=$(cd "$VAULT" 2>/dev/null && pwd -P); then
+        VAULT="$resolved"
+    fi
+    return 0
+}
+
+##
+# Route a command to its implementation. Shared by the CLI and the menu,
+# so validation and locking behave identically everywhere.
+#
+# Information commands (status/health) guard themselves and degrade
+# gracefully; mutating commands are validated here and serialized through
+# the lock.
+##
+dispatch() {
+    local cmd="${1:-}"
+    (( $# )) && shift
+
+    case "$cmd" in
+        # Read-only commands — no lock required.
+        help)         cmd_help ;;
+        version)      cmd_version ;;
+        doctor)       cmd_doctor ;;
+        verify)       cmd_verify ;;
+        log)          cmd_log "$@" ;;
+        status)       cmd_status ;;
+        health)       cmd_health ;;
+        menu)         main_menu ;;
+
+        # Mutating commands — serialized through the lock.
+        sync)         require_git && require_vault && with_lock cmd_sync ;;
+        pull)         require_git && require_vault && with_lock cmd_pull ;;
+        push)         require_git && require_vault && with_lock cmd_push ;;
+        quick)        require_git && require_vault && with_lock cmd_quick ;;
+        backup)       require_vault && with_lock cmd_backup ;;
+        restore)      with_lock cmd_restore "$@" ;;
+        repair)       require_git && require_vault && with_lock cmd_repair "$@" ;;
+        organize)     require_vault && with_lock cmd_organize "$@" ;;
+        init)         require_git && with_lock cmd_init ;;
+
+        *)            error "Unknown command: $cmd"; echo; cmd_help; return 1 ;;
+    esac
+}
+
+main() {
+    # ---- global options (must precede the command) ---------------------
+    while (( $# > 0 )); do
+        case "$1" in
+            -n|--no-color) export NO_COLOR=1; shift ;;
+            -y|--yes)      ASSUME_YES=1;      shift ;;
+            -h|--help)     shift; init_colors; cmd_help;    return 0 ;;
+            -v|--version)  shift; init_colors; cmd_version; return 0 ;;
+            --)            shift; break ;;
+            -*)            init_colors; error "Unknown option: $1"; echo; cmd_help; return 1 ;;
+            *)             break ;;
+        esac
+    done
+
+    init_colors
+    init_log
+
+    # Global signal handlers. on_exit is a no-op unless this instance
+    # actually owns the lock or registered temporaries.
+    trap on_exit EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    # No arguments: launch the interactive menu when attached to a
+    # terminal, or run a full sync when invoked non-interactively
+    # (cron, Tasker, SSH one-shots).
+    if (( $# == 0 )); then
+        if [[ -t 0 && -t 1 ]]; then
+            setup || return 1
+            main_menu
+            return 0
+        fi
+        set -- sync
+    fi
+
+    local cmd="$1"
+    shift
+
+    log "invoked: $cmd ${*:-}"
+
+    # help/version/doctor must work even in a broken environment,
+    # so the sanity pass is skipped for them.
+    case "$cmd" in
+        help|version|doctor) ;;
+        *) setup || return 1 ;;
+    esac
+
+    dispatch "$cmd" "$@"
+}
+
+main "$@"

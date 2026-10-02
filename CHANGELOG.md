@@ -1,0 +1,65 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and versioning follows [Semantic Versioning](https://semver.org/).
+
+## [8.0.0] — Platform unification
+
+### Added
+- **Single platform-aware core** (`bin/ob-sync`): the separate desktop and
+  mobile forks are merged into one script that detects Termux, Linux and
+  macOS at runtime and adapts defaults, checks and hints accordingly.
+- Portability helpers: SHA-256 via `sha256sum` **or** `shasum` (macOS),
+  portable vault-size computation, platform-aware install hints.
+- ShellCheck CI gate (warnings and above) for every shell file.
+- Rewritten installers: `mobile/install.sh` (Termux) and
+  `desktop/install.sh` (Linux/macOS) — local-checkout-first, curl fallback.
+- This changelog, a repository `.gitignore`, and expanded docs.
+
+### Changed
+- **BREAKING:** the command is now canonically `ob-sync` everywhere
+  (previously `obsidian-sync` on desktop and `ob-sync` on mobile).
+- Default desktop vault is `~/Documents/<Vault>`; Termux keeps
+  `~/storage/shared/Documents/<Vault>`.
+
+### Fixed
+- macOS portability: replaced GNU-only `du --exclude`, `stat -c`,
+  `sha256sum` and `xargs -r` with portable equivalents.
+
+## [7.3.0] — Hardening pass
+
+### Fixed
+- Backup ordering: pruning and `restore latest` now sort by the timestamp
+  embedded in filenames. A plain name sort grouped by prefix, letting
+  stale `quick-*` backups evict fresh `pre-repair-*` safety backups.
+- `restore` audits every archive member before extraction — absolute
+  paths, `..` traversal and symlink/special members are refused (tar-slip
+  protection), with a post-extraction symlink sweep.
+
+### Added
+- Temp-file registry: all runtime temporaries are swept on any exit path,
+  including SIGINT/SIGTERM.
+- `status` degrades gracefully without git; `health` distinguishes a
+  missing git binary from actual repository corruption.
+
+## [7.2.0] — Interactive menu & recovery suite
+
+### Added
+- Mobile-friendly interactive menu (default on a TTY), `quick`, `restore`,
+  `verify`, `doctor`, `init` and `log` commands; lock released between
+  menu operations; network watchdog with configurable timeout; automatic
+  git identity fallback; first-time setup that adopts an existing vault.
+
+## [7.0.0] — Engine rewrite
+
+### Fixed
+- Repair executed its cleanup before the file-restoration loop, rendering
+  restoration dead code; ordering corrected and verified.
+- Non-atomic lock acquisition (`mkdir -p`) replaced with atomic `mkdir`.
+- Per-archive checksum sidecars replaced an ever-growing shared manifest.
+
+## [6.0.0] — Initial release
+
+- Atomic verified backups, PID-based locking, two-phase repair with
+  rollback, conventional commits, terminal-safe colors.

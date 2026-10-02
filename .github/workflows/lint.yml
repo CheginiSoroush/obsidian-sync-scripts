@@ -1,0 +1,24 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # Warnings and above — informational/style findings are tolerated.
+      # The codebase is written to pass this gate; keep it that way.
+      - name: Lint all shell scripts
+        run: |
+          shellcheck -x -S warning \
+            bin/ob-sync \
+            mobile/install.sh \
+            desktop/install.sh
