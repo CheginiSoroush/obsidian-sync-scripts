@@ -1,13 +1,11 @@
 <div align="center">
 
-```
  ██████╗ ███████╗██████╗ ███████╗██╗   ██╗███╗   ██╗ ██████╗
 ██╔═══██╗██╔════╝██╔══██╗██╔════╝╚██╗ ██╔╝████╗  ██║██╔════╝
 ██║   ██║███████╗██████╔╝███████╗ ╚████╔╝ ██╔██╗ ██║██║
 ██║   ██║╚════██║██╔══██╗╚════██║  ╚██╔╝  ██║╚██╗██║██║
 ╚██████╔╝███████║██║  ██║███████║   ██║   ██║ ╚████║╚██████╗
  ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝
-```
 
 ### ⚡ Enterprise-grade Obsidian ↔ GitHub sync — from your phone, your laptop, your anything.
 
@@ -27,8 +25,11 @@
 
 ## 📖 Table of Contents
 
+- [� Table of Contents](#-table-of-contents)
 - [🔥 The Problem](#-the-problem)
 - [🚀 Quick Start](#-quick-start)
+  - [📱 Android (Termux)](#-android-termux)
+  - [🖥️ Linux / macOS](#️-linux--macos)
 - [📱 The Interactive Menu](#-the-interactive-menu)
 - [⌨️ Command Reference](#️-command-reference)
 - [🧠 How It Works](#-how-it-works)
@@ -38,6 +39,7 @@
 - [🤖 Automation](#-automation)
 - [🗂️ Repository Structure](#️-repository-structure)
 - [❓ FAQ](#-faq)
+- [🤝 Contributing · 📜 License](#-contributing---license)
 
 ---
 
