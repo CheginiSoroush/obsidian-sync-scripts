@@ -27,7 +27,7 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 - macOS portability: replaced GNU-only `du --exclude`, `stat -c`,
   `sha256sum` and `xargs -r` with portable equivalents.
 - CI: ShellCheck pinned to v0.11.0; `hr` now receives explicit arguments (SC2120).
-- README: pure-ASCII banner; Quick Start block restored after a mis-aimed automated replacement.
+- README: Quick Start block restored after a mis-aimed automated replacement.
 
 ## [7.3.0] — Hardening pass
 
