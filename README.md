@@ -1,5 +1,4 @@
 
-<div align="center">
 
 <pre>
  ██████   ██████╗           ███████╗ ██╗   ██╗ ███╗   ██╗  ██████
@@ -22,13 +21,12 @@
 
 *Your notes deserve better than "hope the sync works."*
 
-</div>
 
 ---
 
 ## 📖 Table of Contents
 
-- [� Table of Contents](#-table-of-contents)
+- [📖 Table of Contents](#-table-of-contents)
 - [🔥 The Problem](#-the-problem)
 - [🚀 Quick Start](#-quick-start)
   - [📱 Android (Termux)](#-android-termux)
