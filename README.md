@@ -1,18 +1,18 @@
+
 <div align="center">
 
 <pre>
- ██████╗ ██████╗       ███████╗██╗   ██╗███╗   ██╗ ██████╗
-██╔═══██╗██╔══██╗      ██╔════╝╚██╗ ██╔╝████╗  ██║██╔════╝
-██║   ██║██████╔╝█████╗███████╗ ╚████╔╝ ██╔██╗ ██║██║
-██║   ██║██╔══██╗╚════╝╚════██║  ╚██╔╝  ██║╚██╗██║██║
-╚██████╔╝██████╔╝      ███████║   ██║   ██║ ╚████║╚██████╗
- ╚═════╝ ╚═════╝       ╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝
+ ██████   ██████╗           ███████╗ ██╗   ██╗ ███╗   ██╗  ██████
+██╔═══██╗ ██╔══██╗          ██╔════╝ ╚██╗ ██╔╝ ████╗  ██║ ██╔════╝
+██║   ██║ ██████╔╝ ██████   ███████╗  ╚████╔╝  ██╔██╗ ██║ ██║
+██║   ██║ ██╔══██╗          ╚════██║   ╚██╔╝   ██║╚██╗██║ ██║
+╚██████╔╝ ██████╔╝          ███████║    ██║    ██║ ╚████║ ╚██████╗
+ ╚═════╝  ╚═════╝           ╚══════╝    ╚═╝    ╚═╝  ╚═══╝  ╚═════╝
 </pre>
 
 ### ⚡ Enterprise-grade Obsidian ↔ GitHub sync — from your phone, your laptop, your anything.
 
 **One script. Three platforms. Zero extra dependencies. Nine layers of defense.**
-
 
 [![Version](https://img.shields.io/badge/version-8.0.0-00B4D8?style=for-the-badge&logo=semver&logoColor=white)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-00C896?style=for-the-badge)](LICENSE)
@@ -28,7 +28,7 @@
 
 ## 📖 Table of Contents
 
-- [📖 Table of Contents](#-table-of-contents)
+- [� Table of Contents](#-table-of-contents)
 - [🔥 The Problem](#-the-problem)
 - [🚀 Quick Start](#-quick-start)
   - [📱 Android (Termux)](#-android-termux)
@@ -174,7 +174,7 @@ the lock is released between actions — press `1` five times in a row if you li
 | `ob-sync doctor` | Diagnose platform, tools, storage, remote, watchdog |
 | `ob-sync status` / `health` / `init` / `log [n]` | Overview · integrity check · first-time setup · recent activity |
 
-**Options:** `-y/--yes` · `-n/--no-color` · `-h/--help` · `-v/--version`
+**Options:** `-y/--yes` · `-n/--no-color` · `-h/--help` · `-v/--version`  
 **Exit codes:** `0` success · `1` failure · `2` another instance running
 
 ---
