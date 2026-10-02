@@ -3,13 +3,14 @@
 <pre>
  ██████╗  ██████╗           ███████╗ ██╗   ██╗ ███╗   ██╗  ██████╗
 ██╔═══██╗ ██╔══██╗          ██╔════╝ ╚██╗ ██╔╝ ████╗  ██║ ██╔════╝
-██║   ██║ ██████╔╝ ███████╗ ███████╗  ╚████╔╝  ██╔██╗ ██║ ██║     
-██║   ██║ ██╔══██╗ ╚══════╝ ╚════██║   ╚██╔╝   ██║╚██╗██║ ██║     
+██║   ██║ ██████╔╝ ███████╗ ███████╗  ╚████╔╝  ██╔██╗ ██║ ██║
+██║   ██║ ██╔══██╗ ╚══════╝ ╚════██║   ╚██╔╝   ██║╚██╗██║ ██║
 ╚██████╔╝ ██████╔╝          ███████║    ██║    ██║ ╚████║ ╚██████╗
  ╚═════╝  ╚═════╝           ╚══════╝    ╚═╝    ╚═╝  ╚═══╝  ╚═════╝
 </pre>
 
 ### ⚡ Enterprise-Grade Obsidian ↔ GitHub Sync
+
 **From your phone, your laptop, your anything.**
 
 *One script. Three platforms. Zero extra dependencies. Nine layers of defense.*
@@ -39,7 +40,7 @@
 
 ## 🔥 The Problem
 
-You take notes on your phone and your laptop. You version them with Git.  
+You take notes on your phone and your laptop. You version them with Git.
 Between those two facts lives a hellscape: mobile networks that die mid-push, Android killing background processes whenever it feels like it, shared storage with no `exec` bits — and one interrupted `git pull` away from a week of lost thoughts.
 
 Most people give up and hope. **You don't have to.**
@@ -64,7 +65,7 @@ Most people give up and hope. **You don't have to.**
 
 ```bash
 pkg install curl
-curl -fsSL [https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/mobile/install.sh](https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/mobile/install.sh) | bash
+curl -fsSL https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/mobile/install.sh | bash
 
 ob-sync doctor     # 1. Verify the environment
 ob-sync init       # 2. Clone or adopt your vault
@@ -74,7 +75,7 @@ ob-sync            # 3. Open the interactive menu
 ### 🖥️ Linux & macOS
 
 ```bash
-git clone [https://github.com/CheginiSoroush/obsidian-sync-scripts.git](https://github.com/CheginiSoroush/obsidian-sync-scripts.git)
+git clone https://github.com/CheginiSoroush/obsidian-sync-scripts.git
 cd obsidian-sync-scripts
 ./desktop/install.sh
 
@@ -210,6 +211,7 @@ Between you and data loss stand nine independent walls — and the very first on
 ## ⌨️ Command Reference
 
 ### 🔄 Synchronization & Workflow
+
 | Command | Description |
 | :--- | :--- |
 | `ob-sync` | Launches the **Interactive Menu** (or runs a full sync when invoked non-interactively / via cron) |
@@ -219,6 +221,7 @@ Between you and data loss stand nine independent walls — and the very first on
 | `ob-sync push` | Commits local changes, then publishes to remote |
 
 ### 📦 Backup, Restore & Repair
+
 | Command | Description |
 | :--- | :--- |
 | `ob-sync backup` | Creates and SHA-256 verifies a full vault backup archive |
@@ -227,6 +230,7 @@ Between you and data loss stand nine independent walls — and the very first on
 | `ob-sync repair` | Atomically rebuilds `.git` metadata from remote while preserving all local files |
 
 ### 🩺 Diagnostics & Vault Hygiene
+
 | Command | Description |
 | :--- | :--- |
 | `ob-sync organize [--fix]` | Audits empty notes, large files & orphaned attachments (`--fix` relocates orphans) |
@@ -237,6 +241,7 @@ Between you and data loss stand nine independent walls — and the very first on
 | `ob-sync log [n]` | Shows recent sync and commit activity (defaults to last `n` entries) |
 
 **Global Flags & Exit Codes:**
+
 * **Flags:** `-y, --yes` (Auto-confirm) · `-n, --no-color` (Plain output) · `-h, --help` · `-v, --version`
 * **Exit Codes:** `0` Success · `1` Operational Failure · `2` Lock Contention (Another instance is running)
 
@@ -259,6 +264,7 @@ Zero config files to manage. Everything is overridable via environment variables
 | `OBS_ATTACH_DIR` | `Attachments` | Target folder when running `ob-sync organize --fix` |
 
 **Example — Fast Unattended Sync:**
+
 ```bash
 OBS_SKIP_BACKUP=1 OBS_GIT_TIMEOUT=300 ob-sync sync
 ```
@@ -331,8 +337,9 @@ Configure Git's credential store and authenticate once with your Personal Access
 
 ```bash
 git config --global credential.helper store
-git ls-remote [https://github.com/you/private-vault.git](https://github.com/you/private-vault.git)   # Enter your PAT once
+git ls-remote https://github.com/you/private-vault.git   # Enter your PAT once
 ```
+
 `ob-sync doctor` will print this exact hint if it detects an unreachable remote.
 </details>
 
@@ -341,9 +348,11 @@ git ls-remote [https://github.com/you/private-vault.git](https://github.com/you/
 <br>
 
 That is the exact scenario `ob-sync` was built for:
+
 1. On the next run, the PID lock detects the dead process ID and reclaims itself.
 2. Any half-written backup exists only as a `.part` file and is automatically swept.
 3. Any interrupted rebase or merge is cleanly auto-aborted before syncing resumes.
+
 </details>
 
 <details>
@@ -358,10 +367,12 @@ Run `brew install bash coreutils` to cover the two macOS gaps (Bash 4+ and the `
 <br>
 
 You absolutely can — and they coexist peacefully on the same vault! `ob-sync` exists for when you want:
+
 * Background or cron syncs **without opening Obsidian**
 * Hardened resilience on **Android shared storage**
 * Cryptographically **verified `.tar.gz` backups** outside Git history
 * An atomic **`.git` repair tool** when mobile crashes corrupt your repo
+
 </details>
 
 ---
