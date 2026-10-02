@@ -30,6 +30,7 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 - README: Quick Start block restored after a mis-aimed automated replacement.
 - README: banner restored inside a proper code fence (the original misalignment came from missing fences, not fonts), then redesigned as an OB-SYNC wordmark in a centered pre block; live CI status badge, restored badge links, trimmed banner rows.
 - Docs linting: .markdownlint.json added — MD033 allow-list documents the sanctioned centered-header HTML (GFM has no centering syntax), MD041 off (centered headers carry no H1 by design), MD013 off (version-skew determinism), MD051 off (emoji variation-selector anchors are a known false-positive zone); output code fences tagged as text; markdownlint job added to CI.
+- Docs linting follow-up: MD036 off (hero taglines are standalone emphasis by design); cspell.json project vocabulary (editor-only, not CI); README leading blank line removed.
 
 ## [7.3.0] — Hardening pass
 
