@@ -8,11 +8,27 @@ on:
 
 jobs:
   shellcheck:
-    name: ShellCheck
+    name: ShellCheck (pinned v0.11.0)
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
+
+      # Pin the exact ShellCheck release so CI and local runs behave
+      # identically. Runner images ship an older version whose SC2120
+      # differs from 0.11.0 — that version skew is what let a passing
+      # local lint fail the gate.
+      - name: Install ShellCheck 0.11.0
+        run: |
+          scdir=/tmp/shellcheck-0.11.0
+          mkdir -p "$scdir"
+          curl -fsSL \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz \
+            | tar -xJ -C "$scdir" --strip-components=1
+          echo "$scdir" >> "$GITHUB_PATH"
+
+      - name: Show ShellCheck version
+        run: shellcheck --version
 
       # Warnings and above — informational/style findings are tolerated.
       # The codebase is written to pass this gate; keep it that way.

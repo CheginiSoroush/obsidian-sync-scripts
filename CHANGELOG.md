@@ -26,6 +26,7 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 ### Fixed
 - macOS portability: replaced GNU-only `du --exclude`, `stat -c`,
   `sha256sum` and `xargs -r` with portable equivalents.
+- CI: ShellCheck pinned to v0.11.0; `hr` now receives explicit arguments (SC2120).
 
 ## [7.3.0] — Hardening pass
 

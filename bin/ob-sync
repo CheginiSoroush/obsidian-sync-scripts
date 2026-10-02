@@ -208,7 +208,7 @@ section() {
     STEP_NUM=0
     echo
     printf '  %s%s%s\n' "$C_BRIGHT_BLUE$C_BOLD" "$1" "$C_RESET"
-    hr
+    hr - 56
 }
 
 ##
