@@ -1,23 +1,23 @@
 <div align="center">
 
-```
- ██████╗ ███████╗██████╗ ███████╗██╗   ██╗███╗   ██╗ ██████╗
-██╔═══██╗██╔════╝██╔══██╗██╔════╝╚██╗ ██╔╝████╗  ██║██╔════╝
-██║   ██║███████╗██████╔╝███████╗ ╚████╔╝ ██╔██╗ ██║██║
-██║   ██║╚════██║██╔══██╗╚════██║  ╚██╔╝  ██║╚██╗██║██║
-╚██████╔╝███████║██║  ██║███████║   ██║   ██║ ╚████║╚██████╗
- ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝
-```
+<pre>
+ ██████╗ ██████╗       ███████╗██╗   ██╗███╗   ██╗ ██████╗
+██╔═══██╗██╔══██╗      ██╔════╝╚██╗ ██╔╝████╗  ██║██╔════╝
+██║   ██║██████╔╝█████╗███████╗ ╚████╔╝ ██╔██╗ ██║██║     
+██║   ██║██╔══██╗╚════╝╚════██║  ╚██╔╝  ██║╚██╗██║██║     
+╚██████╔╝██████╔╝      ███████║   ██║   ██║ ╚████║╚██████╗
+ ╚═════╝ ╚═════╝       ╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝
+</pre>
 
 ### ⚡ Enterprise-grade Obsidian ↔ GitHub sync — from your phone, your laptop, your anything.
 
 **One script. Three platforms. Zero extra dependencies. Nine layers of defense.**
 
-[![Version](https://img.shields.io/badge/version-8.0.0-00B4D8?style=for-the-badge&logo=semver&logoColor=white)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-8.0.0-00B4D8?style=for-the-badge&logo=semver&logoColor=white)](#)
 [![License: MIT](https://img.shields.io/badge/license-MIT-00C896?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20macOS-3DDC84?style=for-the-badge&logo=android&logoColor=white)](#-quick-start)
 [![Shell](https://img.shields.io/badge/shell-Bash%204%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
-[![Lint](https://img.shields.io/badge/CI-ShellCheck-89CFF0?style=for-the-badge&logo=githubactions&logoColor=white)](.github/workflows/lint.yml)
+[![Lint](https://img.shields.io/badge/CI-ShellCheck-89CFF0?style=for-the-badge&logo=githubactions&logoColor=white)](#)
 
 *Your notes deserve better than "hope the sync works."*
 
