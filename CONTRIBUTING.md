@@ -52,3 +52,4 @@ platform differences belong behind the portability helpers inside the script.
 - [ ] Tested on Termux **or** desktop (ideally both, for platform-sensitive changes)
 - [ ] Help text and docs updated if behavior changed
 - [ ] Changelog entry added under the next version heading
+- [ ] After any conflicted rebase: `grep -cE "^(<<<<<<< |=======$|>>>>>>> )" **/*.md` returns 0 before committing
