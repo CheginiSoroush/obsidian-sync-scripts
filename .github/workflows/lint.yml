@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # Pin the exact ShellCheck release so CI and local runs behave
       # identically. Runner images ship an older version whose SC2120
@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # Reads .markdownlint.json from the repo root — the same file that
       # silences the editor warnings. One source of truth for the rules.
