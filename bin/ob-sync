@@ -528,7 +528,7 @@ make_backup() {
         return 1
     fi
     if (( rc == 1 )); then
-        warn "tar finished with warnings — the archive will still be verified:"
+        warn "tar finished with warnings — the archive will still be verified:" >&2
         head -n 5 "$errs" | sed 's/^/      /' >&2
     fi
     rm -f -- "$errs"

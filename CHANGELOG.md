@@ -30,6 +30,8 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 - macOS portability: replaced GNU-only `du --exclude`, `stat -c`,
   `sha256sum` and `xargs -r` with portable equivalents.
 - CI: ShellCheck pinned to v0.11.0; `hr` now receives explicit arguments (SC2120).
+- Backup engine: in-function diagnostics must go to stderr — make_backup runs inside command substitution, so the tar-warning notice printed to stdout was captured into the return value and never displayed; now redirected (>&2).
+- README: rebase resolution had glued the agent's new hero heading onto the original tagline (MD022) and the tagline's trailing period tripped MD026; resolved to a single tagline, converted from H3 to bold emphasis — semantically a tagline, and MD036 is already off for hero emphasis by design.
 - Backup engine: tar stderr is now captured and classified — exit >= 2 fails with the underlying message shown verbatim; exit 1 (warnings, e.g. "file changed as we read it" while the Obsidian app writes workspace.json on-device) is tolerated because the full-stream verification remains the integrity gate.
 - README: Quick Start block restored after a mis-aimed automated replacement.
 - README: banner restored inside a proper code fence (the original misalignment came from missing fences, not fonts), then redesigned as an OB-SYNC wordmark in a centered pre block; live CI status badge, restored badge links, trimmed banner rows.
