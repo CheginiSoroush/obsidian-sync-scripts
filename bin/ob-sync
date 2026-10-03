@@ -499,7 +499,7 @@ list_backups_desc() {
 ##
 make_backup() {
     local prefix="${1:-backup}"
-    local timestamp path tmp errs checksum n=0 rc=0
+    local timestamp path tmp errs n=0 rc=0
 
     mkdir -p "$BACKUP_DIR" \
         || { error "Cannot create backup directory: $BACKUP_DIR"; return 1; }
