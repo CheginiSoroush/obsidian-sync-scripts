@@ -30,6 +30,7 @@ and versioning follows [Semantic Versioning](https://semver.org/).
 - macOS portability: replaced GNU-only `du --exclude`, `stat -c`,
   `sha256sum` and `xargs -r` with portable equivalents.
 - CI: ShellCheck pinned to v0.11.0; `hr` now receives explicit arguments (SC2120).
+- Backup engine: tar stderr is now captured and classified — exit >= 2 fails with the underlying message shown verbatim; exit 1 (warnings, e.g. "file changed as we read it" while the Obsidian app writes workspace.json on-device) is tolerated because the full-stream verification remains the integrity gate.
 - README: Quick Start block restored after a mis-aimed automated replacement.
 - README: banner restored inside a proper code fence (the original misalignment came from missing fences, not fonts), then redesigned as an OB-SYNC wordmark in a centered pre block; live CI status badge, restored badge links, trimmed banner rows.
 - Docs linting: .markdownlint.json added — MD033 allow-list documents the sanctioned centered-header HTML (GFM has no centering syntax), MD041 off (centered headers carry no H1 by design), MD013 off (version-skew determinism), MD051 off (emoji variation-selector anchors are a known false-positive zone); output code fences tagged as text; markdownlint job added to CI.

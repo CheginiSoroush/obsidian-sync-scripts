@@ -486,13 +486,20 @@ list_backups_desc() {
 #
 # Pipeline: archive → verify → atomic rename → sidecar checksum → sanity check
 #
+# tar's stderr is captured, never discarded. On Android shared storage tar
+# may legitimately exit 1 with warnings (e.g. "file changed as we read it"
+# while the Obsidian app writes workspace.json mid-archive). Those are
+# tolerated — Phase 2 re-reads the entire stream as the real integrity
+# gate. Exit codes >= 2 are fatal: the captured message is shown verbatim,
+# because a bare "Backup creation failed" is not diagnosable on a phone.
+#
 # @param $1  filename prefix (e.g. "pre-sync")
 # @stdout    absolute path of the finished archive
 # @return    0 on success, 1 on failure
 ##
 make_backup() {
     local prefix="${1:-backup}"
-    local timestamp path tmp n=0
+    local timestamp path tmp errs checksum n=0 rc=0
 
     mkdir -p "$BACKUP_DIR" \
         || { error "Cannot create backup directory: $BACKUP_DIR"; return 1; }
@@ -500,7 +507,7 @@ make_backup() {
     timestamp=$(date '+%Y%m%d-%H%M%S')
     path="$BACKUP_DIR/${prefix}-${timestamp}.tar.gz"
 
-    # Guard against same-second filename collisions (e.g. quick → sync).
+    # Guard against same-second filename collisions (e.g. quick -> sync).
     while [[ -e "$path" ]]; do
         n=$((n + 1))
         path="$BACKUP_DIR/${prefix}-${timestamp}-${n}.tar.gz"
@@ -510,13 +517,24 @@ make_backup() {
 
     # Phase 1 — archive the vault (including .git) into a temp file, so a
     # crash can never leave behind a half-written "valid-looking" archive.
-    if ! tar -czf "$tmp" -C "$VAULT" . 2>/dev/null; then
-        rm -f -- "$tmp"
-        error "Backup creation failed"
+    errs="${tmp}.errs"
+    temp_register "$errs"
+    tar -czf "$tmp" -C "$VAULT" . 2>"$errs" || rc=$?
+
+    if (( rc >= 2 )); then
+        error "Backup creation failed — tar exit $rc:"
+        sed 's/^/      /' "$errs" >&2
+        rm -f -- "$tmp" "$errs"
         return 1
     fi
+    if (( rc == 1 )); then
+        warn "tar finished with warnings — the archive will still be verified:"
+        head -n 5 "$errs" | sed 's/^/      /' >&2
+    fi
+    rm -f -- "$errs"
 
-    # Phase 2 — verify the archive stream is fully readable.
+    # Phase 2 — verify the archive stream is fully readable. This is the
+    # real gate for warning-tolerated archives from Phase 1.
     if ! tar -tzf "$tmp" >/dev/null 2>&1; then
         rm -f -- "$tmp"
         error "Backup verification failed (corrupt archive)"
@@ -540,7 +558,7 @@ make_backup() {
         return 1
     fi
 
-    log "Backup created: ${path##*/}"
+    log "Backup created: ${path##*/} (tar rc=$rc)"
     printf '%s\n' "$path"
     return 0
 }
