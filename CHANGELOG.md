@@ -3,10 +3,11 @@
 All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
-##
+
 ## [8.1.0] — Vault resolution for real-world machines
 
 ### Added
+
 - Persistent per-machine vault config (default: ~/.config/ob-sync/config, override via OBS_CONFIG): ob-sync init now confirms the vault and saves it, so every later run — cron and non-login shells included — resolves the same vault without shell profile exports.
 - Vault auto-detection: with no OBS_VAULT and no config, common roots are probed for directories containing .obsidian/; a unique hit is adopted, several hits open an interactive picker.
 - Strict resolution precedence (OBS_VAULT > config file > auto-detection > platform default); ob-sync doctor reports which source resolved the vault.
