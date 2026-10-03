@@ -9,12 +9,7 @@
  ╚═════╝  ╚═════╝           ╚══════╝    ╚═╝    ╚═╝  ╚═══╝  ╚═════╝
 </pre>
 
-<<<<<<< HEAD
-=======
 **⚡ Enterprise-grade Obsidian ↔ GitHub sync — from your phone, your laptop, your anything.**
->>>>>>> 3773fba (docs(readme): restore period at end of hero tagline)
-
-**From your phone, your laptop, your anything.**
 
 *One script. Three platforms. Zero extra dependencies. Nine layers of defense.*
 
