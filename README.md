@@ -9,7 +9,11 @@
  ╚═════╝  ╚═════╝           ╚══════╝    ╚═╝    ╚═╝  ╚═══╝  ╚═════╝
 </pre>
 
+<<<<<<< HEAD
 ### ⚡ Enterprise-Grade Obsidian ↔ GitHub Sync
+=======
+### ⚡ Enterprise-grade Obsidian ↔ GitHub sync — from your phone, your laptop, your anything.
+>>>>>>> 3773fba (docs(readme): restore period at end of hero tagline)
 
 **From your phone, your laptop, your anything.**
 
