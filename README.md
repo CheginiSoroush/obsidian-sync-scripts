@@ -14,7 +14,7 @@
 
 *One script. Three platforms. Zero extra dependencies. Nine layers of defense.*
 
-[![Version](https://img.shields.io/badge/version-8.0.0-00B4D8?style=for-the-badge&logo=semver&logoColor=white)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-8.1.0-00B4D8?style=for-the-badge&logo=semver&logoColor=white)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-00C896?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20macOS-3DDC84?style=for-the-badge&logo=android&logoColor=white)](#-quick-start)
 [![Shell](https://img.shields.io/badge/shell-Bash%204%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
@@ -253,6 +253,7 @@ Zero config files to manage. Everything is overridable via environment variables
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `OBS_VAULT` | `~/storage/shared/Documents/<vault>` *(Termux)*<br>`~/Documents/<vault>` *(Desktop)* | Path to your Obsidian vault |
+| `OBS_CONFIG` | `~/.config/ob-sync/config` | Persistent per-machine vault config, written by `ob-sync init`; vault resolution: `OBS_VAULT` > config > auto-detection |
 | `OBS_REMOTE` | *(See script header)* | Git remote repository URL |
 | `OBS_BRANCH` | `main` | Tracked Git branch |
 | `OBS_BACKUP_DIR` | `~/obsidian-backups` | Directory where `.tar.gz` backups and checksums are stored |

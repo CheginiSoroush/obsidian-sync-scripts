@@ -13,6 +13,7 @@ which diagnoses the repository.
 | `Merge conflict detected` | See [Conflicts](#conflicts) |
 | `Fetch failed` / `Push failed` | Network or credentials — see [Authentication](#authentication) |
 | `Vault not found: …` | `OBS_VAULT` points nowhere → `ob-sync init` |
+| ob-sync syncs a different vault than my editor has open | Run `ob-sync doctor` — it reports the resolution source; pin the right one via `ob-sync init` |
 | A backup fails `ob-sync verify` | Storage corruption — delete the bad archive; verified ones remain |
 | Terminal hangs during network ops | The watchdog needs `timeout` — preinstalled on Termux/Linux; macOS: `brew install coreutils` |
 | `Remote default branch is 'master'` | `export OBS_BRANCH=master`, or rename the remote branch |
