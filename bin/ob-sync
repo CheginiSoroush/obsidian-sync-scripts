@@ -73,7 +73,7 @@ set -uo pipefail
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="8.0.0"
+readonly VERSION="8.1.0"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -91,7 +91,8 @@ else
 fi
 
 # Vault and git settings.
-VAULT="${OBS_VAULT:-$DEFAULT_VAULT}"
+VAULT="${OBS_VAULT:-}"          # empty -> resolved at startup (see resolve_vault)
+CONFIG_FILE="${OBS_CONFIG:-$HOME/.config/ob-sync/config}"
 REMOTE="${OBS_REMOTE:-https://github.com/CheginiSoroush/obsidian.git}"
 BRANCH="${OBS_BRANCH:-main}"
 
@@ -125,6 +126,147 @@ TEMP_PATHS=()
 # Optional tooling detection (graceful fallbacks for minimal systems).
 HAS_TIMEOUT=0; command -v timeout >/dev/null 2>&1 && HAS_TIMEOUT=1
 HAS_PGREP=0;   command -v pgrep   >/dev/null 2>&1 && HAS_PGREP=1
+
+
+# ── Vault resolution ─────────────────────────────────────────────────────
+# A vault path exported in ~/.bashrc never reaches cron jobs or non-login
+# shells — that trick silently syncs the WRONG vault at 3 a.m. Resolution
+# therefore follows a strict precedence, and the persistent config file is
+# the product-grade answer for "it must run everywhere, for everyone":
+#   1. OBS_VAULT environment  — explicit override (highest precedence)
+#   2. config file            — per-machine, written by `ob-sync init`
+#   3. auto-detection         — the unique directory holding .obsidian/
+#   4. interactive pick       — several candidates, interactive shells only
+#   5. platform default       — last resort; doctor reports the source
+VAULT_SOURCE="unresolved"
+
+##
+# Read a KEY=VALUE pair from the config file.
+# @param $1 key
+# @stdout value when present; @return 1 when file or key is absent
+##
+config_get() {
+    [[ -r "$CONFIG_FILE" ]] || return 1
+    local key="$1" line
+    while IFS= read -r line; do
+        case "$line" in
+            ''|'#'*) continue ;;
+            "$key="*) printf '%s\n' "${line#"$key="}"; return 0 ;;
+        esac
+    done < "$CONFIG_FILE"
+    return 1
+}
+
+##
+# Persist a KEY=VALUE pair, creating the config directory on first use.
+# Replaces an existing key in place; publishes atomically via rename.
+##
+config_set() {
+    local key="$1" value="$2" tmp
+    if [[ "$CONFIG_FILE" == */* ]]; then
+        mkdir -p "${CONFIG_FILE%/*}" || return 1
+    fi
+    tmp=$(mktemp) || return 1
+    temp_register "$tmp"
+    {
+        if [[ -r "$CONFIG_FILE" ]]; then
+            grep -v "^${key}=" "$CONFIG_FILE" || :
+        fi
+        printf '%s\n' "$key=$value"
+    } > "$tmp"
+    mv -f "$tmp" "$CONFIG_FILE"
+}
+
+##
+# Probe common roots for Obsidian vaults (directories containing .obsidian/).
+# Deliberately shallow: this runs on Android shared storage where deep scans
+# are expensive. Custom locations (e.g. a mounted partition) are reached via
+# the config file or OBS_VAULT, never by widening this scan.
+##
+discover_vaults() {
+    local -a roots=()
+    local root d
+    if (( IS_TERMUX )); then
+        roots=("$HOME/storage/shared/Documents" "$HOME/storage/shared/Obsidian" "$HOME/storage/shared")
+    else
+        roots=("$HOME/Documents" "$HOME/Obsidian" "$HOME/vaults")
+    fi
+    for root in "${roots[@]}"; do
+        [[ -d "$root" ]] || continue
+        while IFS= read -r -d '' d; do
+            printf '%s\n' "${d%/.obsidian}"
+        done < <(find "$root" -maxdepth 2 -type d -name .obsidian -print0 2>/dev/null)
+    done | sort -u
+}
+
+##
+# Resolve the vault into $VAULT and record the source in $VAULT_SOURCE.
+# Never prompts unless several candidates exist AND stdin is a TTY.
+# @return 0 on success, 1 when resolution cannot complete
+##
+resolve_vault() {
+    local -a candidates=()
+    local cfg c i reply=""
+
+    # 1 — explicit environment override: trust the operator, even if the
+    #     directory does not exist yet (a clone may be about to create it).
+    if [[ -n "$VAULT" ]]; then
+        VAULT_SOURCE="environment"
+        [[ -d "$VAULT" ]] || warn "OBS_VAULT does not exist (yet): $VAULT"
+        return 0
+    fi
+
+    # 2 — persistent per-machine configuration.
+    if cfg=$(config_get VAULT) && [[ -n "$cfg" ]]; then
+        if [[ -d "$cfg" ]]; then
+            VAULT="$cfg"
+            VAULT_SOURCE="config file"
+            return 0
+        fi
+        warn "Configured vault no longer exists: $cfg"
+    fi
+
+    # 3/4 — auto-detection across the common roots.
+    while IFS= read -r c; do
+        [[ -n "$c" ]] && candidates+=("$c")
+    done < <(discover_vaults)
+
+    if (( ${#candidates[@]} == 1 )); then
+        VAULT="${candidates[0]}"
+        VAULT_SOURCE="auto-detected"
+        info "Auto-detected vault: $VAULT"
+        return 0
+    fi
+
+    if (( ${#candidates[@]} > 1 )); then
+        if [[ -t 0 ]]; then
+            warn "Multiple Obsidian vaults found — pick one:"
+            i=1
+            for c in "${candidates[@]}"; do
+                printf '    %s%d)%s %s\n' "$C_CYAN" "$i" "$C_RESET" "$c"
+                i=$((i + 1))
+            done
+            printf '\n'
+            read -r -p "  Select vault [1]: " reply || :
+            reply="${reply:-1}"
+            if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#candidates[@]} )); then
+                VAULT="${candidates[reply - 1]}"
+                VAULT_SOURCE="selected"
+                return 0
+            fi
+            error "Invalid selection"
+            return 1
+        fi
+        error "Multiple vaults found — pin one via ob-sync init or OBS_VAULT"
+        return 1
+    fi
+
+    # 5 — platform default.
+    VAULT="$DEFAULT_VAULT"
+    VAULT_SOURCE="default"
+    return 0
+}
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1771,6 +1913,11 @@ cmd_doctor() {
         success "Native filesystem — no storage permission required"
     fi
 
+    step "Resolving vault"
+    resolve_vault || :
+    kv "Resolution" "$VAULT_SOURCE"
+    kv "Vault" "$VAULT"
+
     step "Checking vault access"
     if [[ -d "$VAULT" ]]; then
         success "Vault found"
@@ -1861,6 +2008,29 @@ cmd_init() {
         fi
     fi
 
+    step "Confirming vault location"
+    info "Vault: $VAULT"
+    local reply=""
+    if (( ! ASSUME_YES )) && [[ -t 0 ]]; then
+        read -r -p "  Use this vault? [Y/n]: " reply || :
+        if [[ "$reply" =~ ^[Nn]$ ]]; then
+            read -r -p "  Enter vault path: " reply || :
+            if [[ -d "$reply" ]]; then
+                VAULT=$(cd "$reply" && pwd -P)
+                info "Vault: $VAULT"
+            else
+                error "No such directory: $reply"
+                return 1
+            fi
+        fi
+    fi
+    # Pin only an existing vault; fresh clones live under the scanned roots,
+    # so auto-detection covers them and -y runs never pin a dead default.
+    if [[ -d "$VAULT" ]] && config_set VAULT "$VAULT"; then
+        success "Vault saved to $CONFIG_FILE"
+    elif [[ ! -d "$VAULT" ]]; then
+        warn "Vault not present yet — config not pinned (auto-detection will cover standard clones)"
+    fi
     if [[ -d "$VAULT/.git" ]]; then
         info "Vault already has a git repository — applying configuration only"
     elif [[ -d "$VAULT" ]]; then
@@ -2104,8 +2274,10 @@ cmd_help() {
     -v, --version         Show version information
 
   ENVIRONMENT
-    OBS_VAULT             Vault path (default: ~/storage/shared/Documents/<vault> on
-                          Termux, ~/Documents/<vault> on desktop)
+    OBS_VAULT             Vault path override (highest precedence)
+    OBS_CONFIG            Config file (default: ~/.config/ob-sync/config);
+                          vault resolution: OBS_VAULT > config file >
+                          auto-detection (dir containing .obsidian/) > default
     OBS_REMOTE            Remote repository URL
     OBS_BRANCH            Tracked branch (default: main)
     OBS_BACKUP_DIR        Backup directory (default: ~/obsidian-backups)
@@ -2173,6 +2345,8 @@ setup() {
         warn "Install with: $(install_hint)"
         return 1
     fi
+
+    resolve_vault || return 1
 
     local resolved
     if resolved=$(cd "$VAULT" 2>/dev/null && pwd -P); then
