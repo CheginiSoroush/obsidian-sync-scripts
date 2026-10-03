@@ -1,3 +1,4 @@
+
 <div align="center">
 
 <pre>
@@ -201,7 +202,7 @@ Between you and data loss stand nine independent walls — and the very first on
 | **05** | **Self-Healing Git** | Interrupted rebases, unfinished merges, and stale `.lock` files are recovered automatically. |
 | **06** | **Two-Phase Repair** | Replacement `.git` is cloned, `fsck`-verified, and staged *before* anything moves — with instant rollback. |
 | **07** | **Tar-Slip Guardian** | `restore` audits every archive member prior to extraction — absolute paths, `..` traversal, and symlinks are refused. |
-| **08** | **Temp Registry** | Every runtime temporary file is tracked and swept on *any* exit path — including `Ctrl+C` or `SIGKILL` recovery. |
+| **08** | **Temp Registry** | Every runtime temporary file is tracked and swept on *any* exit path — including `Ctrl+C`; artifacts leaked by an uncatchable `SIGKILL` are reclaimed on the next run. |
 | **09** | **Additive-Only Restore** | Remote files are only ever *added* when missing during recovery; your local edits always win. |
 
 ---
@@ -318,7 +319,7 @@ obsidian-sync-scripts/
 
 ---
 
-## ❓ Frequently Asked Questions
+## ❓ FAQ
 
 <details>
 <summary><b>🔒 Is my data actually safe?</b></summary>
@@ -393,6 +394,6 @@ Released under the **[MIT License](LICENSE)**.
 
 <br>
 
-[⬆️ Back to Top](#-enterprise-grade-obsidian--github-sync)
+[⬆️ Back to Top](#readme-top)
 
 </div>
