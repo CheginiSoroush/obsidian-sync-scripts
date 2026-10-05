@@ -9,7 +9,7 @@ on:
 jobs:
   shellcheck:
     name: ShellCheck (pinned v0.11.0)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out the repository
         uses: actions/checkout@v5
@@ -43,7 +43,7 @@ jobs:
 
   test:
     name: Functional test suite
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out the repository
         uses: actions/checkout@v5
@@ -55,7 +55,7 @@ jobs:
 
   test-bash-matrix:
     name: Functional suite on bash ${{ matrix.bash }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -78,12 +78,21 @@ jobs:
       - name: Show bash version
         run: bash --version | head -n 1
 
+      # Containers run as root, and root writes through the permission
+      # bits the suite uses to simulate unwritable vaults/backup dirs.
+      # Run the suite as a normal user — the same context as every real
+      # device ob-sync serves — so those checks keep their teeth.
+      - name: Create an unprivileged tester and hand over the workspace
+        run: |
+          adduser -D -u 1002 tester
+          chown -R tester "$GITHUB_WORKSPACE"
+
       - name: Run tests/run-tests.sh
-        run: bash tests/run-tests.sh
+        run: su tester -c 'bash tests/run-tests.sh'
 
   markdownlint:
     name: markdownlint-cli2
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out the repository
         uses: actions/checkout@v5

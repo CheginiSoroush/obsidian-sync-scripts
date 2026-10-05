@@ -30,6 +30,14 @@ trap 'rm -rf -- "$SB"' EXIT
 PASS=0
 FAIL=0
 
+# Root writes through directory permission bits, so the two chmod-555
+# "unwritable directory" simulations (backup_failed, doctor vault-fail)
+# cannot fail as root. Those checks self-skip under root instead of
+# reporting phantom failures — CI runs this suite unprivileged so the
+# checks keep full coverage there.
+IS_ROOT=0
+[ "$(id -u)" = "0" ] && IS_ROOT=1
+
 # ── assertions ───────────────────────────────────────────────────────────────
 t() {  # t <name> <expected-rc> <command...>
     local name="$1" want="$2"; shift 2
@@ -685,7 +693,9 @@ if command -v python3 >/dev/null 2>&1; then
     "$OB" backup --json >"$SB/out.txt" 2>/dev/null
     rc=$?
     chmod 755 "$SB/backups"
-    if (( rc == 1 )) && grep -q '"code": "backup_failed"' "$SB/out.txt" \
+    if [[ "$IS_ROOT" == 1 ]]; then
+        echo "  [SKIP] backup_failed error document (as root, 555 bits do not block writes)"
+    elif (( rc == 1 )) && grep -q '"code": "backup_failed"' "$SB/out.txt" \
                        && grep -q '"backup": null' "$SB/out.txt"; then
         PASS=$((PASS + 1)); echo "  [ OK ] failing backup -> error document, code=backup_failed, backup=null"
     else
@@ -780,7 +790,9 @@ chmod 555 "$SB/vault1"
 "$OB" doctor --json >"$SB/out.txt" 2>/dev/null
 rc=$?
 chmod 755 "$SB/vault1"
-if (( rc == 1 )) && grep -q '"result": "error"' "$SB/out.txt" \
+if [[ "$IS_ROOT" == 1 ]]; then
+    echo "  [SKIP] unwritable vault diagnostics (as root, 555 bits do not block writes)"
+elif (( rc == 1 )) && grep -q '"result": "error"' "$SB/out.txt" \
                    && grep -q '"name": "vault", "status": "fail"' "$SB/out.txt"; then
     PASS=$((PASS + 1)); echo "  [ OK ] unwritable vault -> fail row, result=error, rc=1"
 else
