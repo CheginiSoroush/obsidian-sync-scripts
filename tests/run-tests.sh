@@ -157,7 +157,7 @@ t "backup"               0 "$OB" backup
 t "verify"               0 "$OB" verify
 assertout "restore --list shows layout"   "Top level" "$OB" restore --list latest
 assertout "restore --list counts notes"   "markdown"  "$OB" restore --list latest
-t "restore --list inventory (non-TTY)"  0 bash -c "$OB restore --list </dev/null"
+t "restore --list inventory (non-TTY)"  0 bash -c "${OB@Q} restore --list </dev/null"
 assertout "restore --dry-run prints plan"    "Execution plan" "$OB" restore --dry-run latest
 assertout "restore --dry-run changes nothing" "was not modified" "$OB" restore --dry-run latest
 t "restore bad flag -> rc=1"        1 "$OB" restore --bogus latest
@@ -165,7 +165,7 @@ t "restore missing target -> rc=1"  1 "$OB" restore does-not-exist
 # Regression (8.4.0): a scripted restore without consent used to silently
 # cancel AND exit 0 — the worst possible failure mode. It must refuse.
 rm -f "$SB/vault1/note1.md"
-t "restore w/o consent refuses -> rc=1"  1 bash -c "$OB restore latest </dev/null"
+t "restore w/o consent refuses -> rc=1"  1 bash -c "${OB@Q} restore latest </dev/null"
 assert "refused restore left vault untouched"  bash -c '! test -f "$SB/vault1/note1.md"'
 t "restore latest -y"    0 "$OB" restore latest -y
 assert   "restored note actually back"  test -f "$SB/vault1/note1.md"
@@ -229,10 +229,10 @@ assertout "sync via config only" "Sync complete" cat "$SB/sync-cron.txt"
 echo "== 17. completions, JSON & help =="
 t "completion script syntax"   0 bash -n "$ROOT/completions/ob-sync.bash"
 assertout "help documents restore --list"  "dry-run" "$OB" help
-assertout "status --json: version field"   '"version": "' bash -c "$OB status --json"
-assertout "status --json: real booleans"   '"exists": true' bash -c "$OB status --json"
+assertout "status --json: version field"   '"version": "' bash -c "${OB@Q} status --json"
+assertout "status --json: real booleans"   '"exists": true' bash -c "${OB@Q} status --json"
 if command -v python3 >/dev/null 2>&1; then
-    t "status --json parses as JSON"  0 bash -c "$OB status --json | python3 -m json.tool >/dev/null"
+    t "status --json parses as JSON"  0 bash -c "${OB@Q} status --json | python3 -m json.tool >/dev/null"
 else
     echo "  [SKIP] status --json parses as JSON (python3 not installed)"
 fi
@@ -298,7 +298,7 @@ assert   "managed block removed"           bash -c "test ! -s '$FAKE_CRONTAB'"
 t "cron uninstall -y (idempotent)"       0 "${CENV[@]}" "$OB" cron uninstall -y
 assertout "idempotent: nothing to remove"  "nothing to remove" "${CENV[@]}" "$OB" cron uninstall -y
 assertout "help documents cron"            "cron \[sub\]" "$OB" help
-t "edit-conf non-TTY refuses -> rc=1"    1 bash -c "$OB edit-conf </dev/null"
+t "edit-conf non-TTY refuses -> rc=1"    1 bash -c "${OB@Q} edit-conf </dev/null"
 
 echo "== 20. status --json stays clean when the vault is auto-detected =="
 # Regression (8.5.0): setup()'s "Auto-detected vault:" info line used to
@@ -311,11 +311,11 @@ if command -v python3 >/dev/null 2>&1; then
     t "auto-detected vault: status --json parses"  0 \
         env -u OBS_VAULT OBS_CONFIG="$SB/config-json" OBS_BACKUP_DIR="$SB/backups" \
             OBS_LOG="$SB/ob.log" TMPDIR="$SB/tmp" HOME="$SB/home" \
-        bash -c "$OB status --json | python3 -m json.tool >/dev/null"
+        bash -c "${OB@Q} status --json | python3 -m json.tool >/dev/null"
     assertout "auto-detected vault: JSON has version field"  '"version"' \
         env -u OBS_VAULT OBS_CONFIG="$SB/config-json" OBS_BACKUP_DIR="$SB/backups" \
             OBS_LOG="$SB/ob.log" TMPDIR="$SB/tmp" HOME="$SB/home" \
-        bash -c "$OB status --json"
+        bash -c "${OB@Q} status --json"
 else
     echo "  [SKIP] auto-detected status --json checks (python3 not installed)"
 fi
@@ -341,10 +341,10 @@ assert isinstance(cfg["exists"], bool)
 assert isinstance(cfg["vault_source"], str) and cfg["vault_source"]
 PY
     t "status --json: watchdogs/cron/config shape" 0 \
-        bash -c "$OB status --json | python3 '$SB/check-status-shape.py'"
+        bash -c "${OB@Q} status --json | python3 '$SB/check-status-shape.py'"
     # The harness pins the vault via OBS_VAULT — the source must say so.
     assertout "vault_source reports environment override" \
-        '"vault_source": "environment"' bash -c "$OB status --json"
+        '"vault_source": "environment"' bash -c "${OB@Q} status --json"
 else
     echo "  [SKIP] status --json shape checks (python3 not installed)"
 fi
@@ -353,12 +353,12 @@ fi
 # section-19 emulator: install -> scheduled true + job line, wipe -> false.
 t "cron install hourly (json state setup)" 0 "${CENV[@]}" "$OB" cron install hourly
 assertout "status --json: cron.scheduled true" '"scheduled": true' \
-    env PATH="$CRONBIN:$PATH" FAKE_CRONTAB="$FAKE_CRONTAB" bash -c "$OB status --json"
+    env PATH="$CRONBIN:$PATH" FAKE_CRONTAB="$FAKE_CRONTAB" bash -c "${OB@Q} status --json"
 assertout "status --json: cron job line present" '"job": ".* sync >>' \
-    env PATH="$CRONBIN:$PATH" FAKE_CRONTAB="$FAKE_CRONTAB" bash -c "$OB status --json"
+    env PATH="$CRONBIN:$PATH" FAKE_CRONTAB="$FAKE_CRONTAB" bash -c "${OB@Q} status --json"
 : > "$FAKE_CRONTAB"
 assertout "status --json: cron.scheduled false after wipe" '"scheduled": false' \
-    env PATH="$CRONBIN:$PATH" FAKE_CRONTAB="$FAKE_CRONTAB" bash -c "$OB status --json"
+    env PATH="$CRONBIN:$PATH" FAKE_CRONTAB="$FAKE_CRONTAB" bash -c "${OB@Q} status --json"
 
 echo "== 22. restore --list --json (machine-readable backups) =="
 if command -v python3 >/dev/null 2>&1; then
@@ -376,7 +376,7 @@ assert isinstance(b["sidecar"], bool)
 assert b["sidecar_ok"] is None or isinstance(b["sidecar_ok"], bool)
 PY
     t "restore --list --json: inventory parses" 0 \
-        bash -c "$OB restore --list --json | python3 '$SB/check-inv.py'"
+        bash -c "${OB@Q} restore --list --json | python3 '$SB/check-inv.py'"
 
     cat > "$SB/check-prev.py" <<'PY'
 import json, sys
@@ -391,14 +391,14 @@ assert isinstance(d["notes"], int)
 assert isinstance(d["top_level"], list) and len(d["top_level"]) >= 1
 PY
     t "restore --list --json latest: preview parses" 0 \
-        bash -c "$OB restore --list --json latest | python3 '$SB/check-prev.py'"
+        bash -c "${OB@Q} restore --list --json latest | python3 '$SB/check-prev.py'"
 
     # JSON must be the ONLY thing on stdout even when the vault is
     # auto-detected (same regression class as section 20).
     t "restore --list --json: auto-detected vault stays clean" 0 \
         env -u OBS_VAULT OBS_CONFIG="$SB/config-json" OBS_BACKUP_DIR="$SB/backups" \
             OBS_LOG="$SB/ob.log" TMPDIR="$SB/tmp" HOME="$SB/home" \
-        bash -c "$OB restore --list --json | python3 -m json.tool >/dev/null"
+        bash -c "${OB@Q} restore --list --json | python3 -m json.tool >/dev/null"
 else
     echo "  [SKIP] restore --list --json checks (python3 not installed)"
 fi
@@ -410,7 +410,7 @@ mkdir -p "$EMPTY_DIR"
 t "restore --list --json: empty inventory rc=0" 0 \
     env OBS_BACKUP_DIR="$EMPTY_DIR" OBS_CONFIG="$SB/config" OBS_LOG="$SB/ob.log" \
         TMPDIR="$SB/tmp" HOME="$SB/home" OBS_VAULT="$SB/vault1" \
-    bash -c "$OB restore --list --json | grep -q '\"count\": 0'"
+    bash -c "${OB@Q} restore --list --json | grep -q '\"count\": 0'"
 
 # Flag validation and parseable failure documents (no python needed).
 t "restore --json without --list -> rc=1" 1 "$OB" restore --json
@@ -449,11 +449,11 @@ assert isinstance(d["remote"], str) and d["remote"]
 PY
     printf 'sync-json ok\n' > "$SB/vault1/sync-json.md"
     t "sync --json: ok document parses & shape holds" 0 \
-        bash -c "$OB sync --json | python3 '$SB/check-sync.py'"
+        bash -c "${OB@Q} sync --json | python3 '$SB/check-sync.py'"
 
     # OBS_SKIP_BACKUP=1 must be reflected as a real boolean with a null backup.
     t "sync --json with OBS_SKIP_BACKUP=1 -> backup_skipped true" 0 \
-        env OBS_SKIP_BACKUP=1 bash -c "printf 'x' >> '$SB/vault1/sync-json.md' && $OB sync --json | grep -q '\"backup_skipped\": true'"
+        env OBS_SKIP_BACKUP=1 bash -c "printf 'x' >> '$SB/vault1/sync-json.md' && ${OB@Q} sync --json | grep -q '\"backup_skipped\": true'"
 else
     echo "  [SKIP] sync --json shape checks (python3 not installed)"
 fi
@@ -508,10 +508,10 @@ if command -v python3 >/dev/null 2>&1; then
     # (guards live inside cmd_sync, not dispatch, so --json is never left
     # with an empty stdout).
     t "missing vault -> error document, rc=1" 1 \
-        env OBS_VAULT="$SB/ghost-vault" bash -c "$OB sync --json 2>/dev/null"
+        env OBS_VAULT="$SB/ghost-vault" bash -c "${OB@Q} sync --json 2>/dev/null"
     t "missing vault document parses as JSON" 0 \
-        env OBS_VAULT="$SB/ghost-vault" bash -c "$OB sync --json 2>/dev/null | python3 -m json.tool >/dev/null"
-    env OBS_VAULT="$SB/ghost-vault" bash -c "$OB sync --json 2>/dev/null" >"$SB/out.txt" 2>/dev/null
+        env OBS_VAULT="$SB/ghost-vault" bash -c "${OB@Q} sync --json 2>/dev/null | python3 -m json.tool >/dev/null"
+    env OBS_VAULT="$SB/ghost-vault" bash -c "${OB@Q} sync --json 2>/dev/null" >"$SB/out.txt" 2>/dev/null
     if grep -q '"code": "vault_missing"' "$SB/out.txt"; then
         PASS=$((PASS + 1)); echo "  [ OK ] missing vault reports machine code"
     else
@@ -550,12 +550,12 @@ PY
 
     # Up-to-date pull: clean vault, nothing behind.
     t "pull --json: up-to-date document parses & shape holds" 0 \
-        bash -c "$OB pull --json | python3 '$SB/check-op.py' pull uptodate"
+        bash -c "${OB@Q} pull --json | python3 '$SB/check-op.py' pull uptodate"
 
     # push: a pending change lands on the remote, pushed>=1.
     printf 'push-json change\n' >> "$SB/vault1/note1.md"
     t "push --json: ok document parses & shape holds" 0 \
-        bash -c "$OB push --json | python3 '$SB/check-op.py' push"
+        bash -c "${OB@Q} push --json | python3 '$SB/check-op.py' push"
 
     # pull integrate: vault2 lands a change, vault1 pulls it. A NEW file,
     # not an append to note1.md — two devices appending different lines to
@@ -565,11 +565,11 @@ PY
     t "vault2 sync (pull-json setup, lands remote change)" 0 "$OB" sync -y
     export OBS_VAULT="$SB/vault1"
     t "pull --json: integrates remote commits (pulled>=1)" 0 \
-        bash -c "$OB pull --json | python3 '$SB/check-op.py' pull integrate"
+        bash -c "${OB@Q} pull --json | python3 '$SB/check-op.py' pull integrate"
 
     # quick: verified backup surfaces as THE operation backup.
     t "quick --json: ok document with quick-* backup" 0 \
-        bash -c "$OB quick --json | python3 '$SB/check-op.py' quick"
+        bash -c "${OB@Q} quick --json | python3 '$SB/check-op.py' quick"
 else
     echo "  [SKIP] pull/push/quick --json shape checks (python3 not installed)"
 fi
@@ -588,10 +588,10 @@ echo "== 26. pull/push/quick --json failure documents & purity =="
 # vault_missing for pull: even a broken environment answers with parseable
 # JSON (guards live inside the wrappers, not dispatch).
 t "missing vault pull --json -> error document, rc=1" 1 \
-    env OBS_VAULT="$SB/ghost-vault" bash -c "$OB pull --json 2>/dev/null"
+    env OBS_VAULT="$SB/ghost-vault" bash -c "${OB@Q} pull --json 2>/dev/null"
 t "missing vault pull --json parses as JSON" 0 \
-    env OBS_VAULT="$SB/ghost-vault" bash -c "$OB pull --json 2>/dev/null | python3 -m json.tool >/dev/null"
-env OBS_VAULT="$SB/ghost-vault" bash -c "$OB pull --json 2>/dev/null" >"$SB/out.txt" 2>/dev/null
+    env OBS_VAULT="$SB/ghost-vault" bash -c "${OB@Q} pull --json 2>/dev/null | python3 -m json.tool >/dev/null"
+env OBS_VAULT="$SB/ghost-vault" bash -c "${OB@Q} pull --json 2>/dev/null" >"$SB/out.txt" 2>/dev/null
 if grep -q '"code": "vault_missing"' "$SB/out.txt"; then
     PASS=$((PASS + 1)); echo "  [ OK ] missing vault pull reports machine code"
 else
@@ -637,7 +637,7 @@ if command -v python3 >/dev/null 2>&1; then
     # JSON purity: whatever vault resolution does, no prose may reach the
     # document (exercises main()'s SILENT_UI branch for the new commands).
     t "pull --json parses with unpinned OBS_VAULT" 0 \
-        env -u OBS_VAULT bash -c "$OB pull --json 2>/dev/null | python3 -m json.tool >/dev/null"
+        env -u OBS_VAULT bash -c "${OB@Q} pull --json 2>/dev/null | python3 -m json.tool >/dev/null"
 fi
 
 echo "== 27. backup --json (machine-readable manual backup) =="
@@ -661,7 +661,7 @@ assert b["sidecar_ok"] is True, d
 assert isinstance(d["elapsed_seconds"], int) and d["elapsed_seconds"] >= 0
 PY
     t "backup --json: ok document parses & shape holds" 0 \
-        bash -c "$OB backup --json | python3 '$SB/check-backup.py'"
+        bash -c "${OB@Q} backup --json | python3 '$SB/check-backup.py'"
 else
     echo "  [SKIP] backup --json shape checks (python3 not installed)"
 fi
@@ -676,10 +676,10 @@ if command -v python3 >/dev/null 2>&1; then
     # vault_missing: the guard lives inside cmd_backup (not dispatch), so
     # --json answers with a parseable document even on a broken environment.
     t "missing vault backup --json -> error document, rc=1" 1 \
-        env OBS_VAULT="$SB/ghost-vault" bash -c "$OB backup --json 2>/dev/null"
+        env OBS_VAULT="$SB/ghost-vault" bash -c "${OB@Q} backup --json 2>/dev/null"
     t "missing vault backup --json parses as JSON" 0 \
-        env OBS_VAULT="$SB/ghost-vault" bash -c "$OB backup --json 2>/dev/null | python3 -m json.tool >/dev/null"
-    env OBS_VAULT="$SB/ghost-vault" bash -c "$OB backup --json 2>/dev/null" >"$SB/out.txt" 2>/dev/null
+        env OBS_VAULT="$SB/ghost-vault" bash -c "${OB@Q} backup --json 2>/dev/null | python3 -m json.tool >/dev/null"
+    env OBS_VAULT="$SB/ghost-vault" bash -c "${OB@Q} backup --json 2>/dev/null" >"$SB/out.txt" 2>/dev/null
     if grep -q '"code": "vault_missing"' "$SB/out.txt"; then
         PASS=$((PASS + 1)); echo "  [ OK ] missing vault backup reports machine code"
     else
@@ -705,7 +705,7 @@ if command -v python3 >/dev/null 2>&1; then
 
     # JSON purity with an unpinned vault (SILENT_UI must cover kv lines too).
     t "backup --json parses with unpinned OBS_VAULT" 0 \
-        env -u OBS_VAULT bash -c "$OB backup --json 2>/dev/null | python3 -m json.tool >/dev/null"
+        env -u OBS_VAULT bash -c "${OB@Q} backup --json 2>/dev/null | python3 -m json.tool >/dev/null"
 fi
 
 echo "== 28. lock contention keeps the JSON contract =="
@@ -725,11 +725,11 @@ if command -v python3 >/dev/null 2>&1; then
     for cmdname in sync pull push quick; do
         t "$cmdname --json lock document parses & says lock_busy" 0 \
             env OBS_VAULT="$SB/vault1" bash -c \
-            "$OB $cmdname --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"result\"]==\"error\" and d[\"error\"][\"code\"]==\"lock_busy\" and d[\"error\"][\"message\"], d'"
+            "${OB@Q} $cmdname --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"result\"]==\"error\" and d[\"error\"][\"code\"]==\"lock_busy\" and d[\"error\"][\"message\"], d'"
     done
     t "backup --json lock document parses & says lock_busy" 0 \
         env OBS_VAULT="$SB/vault1" bash -c \
-        "$OB backup --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"result\"]==\"error\" and d[\"backup\"] is None and d[\"error\"][\"code\"]==\"lock_busy\", d'"
+        "${OB@Q} backup --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"result\"]==\"error\" and d[\"backup\"] is None and d[\"error\"][\"code\"]==\"lock_busy\", d'"
 fi
 rm -rf -- "$LOCKDIR"
 
@@ -762,7 +762,7 @@ assert rows["remote_branch"]["status"] == "ok", rows["remote_branch"]
 assert rows["backup_topology"]["status"] == "warn", rows["backup_topology"]  # sandbox: same fs
 PY
     t "doctor --json: ok document parses & shape holds" 0 \
-        bash -c "$OB doctor --json | python3 '$SB/check-doctor.py'"
+        bash -c "${OB@Q} doctor --json | python3 '$SB/check-doctor.py'"
 else
     echo "  [SKIP] doctor --json shape checks (python3 not installed)"
 fi
@@ -782,7 +782,7 @@ t "doctor --json with missing vault -> rc=0 (warn row)" 0 \
 if command -v python3 >/dev/null 2>&1; then
     t "missing vault doctor row says warn" 0 \
         env OBS_VAULT="$SB/ghost-vault" bash -c \
-        "$OB doctor --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); rows={c[\"name\"]: c for c in d[\"checks\"]}; assert d[\"result\"]==\"ok\" and rows[\"vault\"][\"status\"]==\"warn\" and rows[\"backup_topology\"][\"status\"]==\"info\", d'"
+        "${OB@Q} doctor --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); rows={c[\"name\"]: c for c in d[\"checks\"]}; assert d[\"result\"]==\"ok\" and rows[\"vault\"][\"status\"]==\"warn\" and rows[\"backup_topology\"][\"status\"]==\"info\", d'"
 fi
 
 # Failure contract: an unwritable vault is a FAIL row -> result=error, rc 1.
@@ -826,7 +826,7 @@ for a in d["archives"]:
     assert a["sidecar"] is True and a["sidecar_ok"] is True, a  # real backups carry sidecars
 PY
     t "verify --json: ok document parses & shape holds" 0 \
-        bash -c "$OB verify --json | python3 '$SB/check-verify.py'"
+        bash -c "${OB@Q} verify --json | python3 '$SB/check-verify.py'"
 else
     echo "  [SKIP] verify --json shape checks (python3 not installed)"
 fi
@@ -844,7 +844,7 @@ if command -v python3 >/dev/null 2>&1; then
     rm -rf "$SB/verify-empty"; mkdir -p "$SB/verify-empty"
     t "verify --json on empty dir -> ok, rc=0" 0 \
         env OBS_BACKUP_DIR="$SB/verify-empty" bash -c \
-        "$OB verify --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"result\"]==\"ok\" and d[\"total\"]==0 and d[\"archives\"]==[] and d[\"error\"] is None, d'"
+        "${OB@Q} verify --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d[\"result\"]==\"ok\" and d[\"total\"]==0 and d[\"archives\"]==[] and d[\"error\"] is None, d'"
 
     # Corruption contract: one good archive (copied with its sidecar) plus
     # one truncated fake (no sidecar) -> rc 1, verification_failed, and the
@@ -864,7 +864,7 @@ if command -v python3 >/dev/null 2>&1; then
         tail -8 "$SB/out.txt" | sed 's/^/         /'
     fi
     t "corrupt document: counters, corrupt row, missing-sidecar semantics" 0 \
-        env OBS_BACKUP_DIR="$SB/verify-mixed" bash -c "$OB verify --json 2>/dev/null | python3 -c '
+        env OBS_BACKUP_DIR="$SB/verify-mixed" bash -c "${OB@Q} verify --json 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"result\"] == \"error\" and d[\"error\"][\"code\"] == \"verification_failed\", d
@@ -877,7 +877,7 @@ assert good[\"status\"] == \"ok\" and good[\"sidecar_ok\"] is True, good'"
 
     # JSON purity with an unpinned vault (SILENT_UI must hold for verify too).
     t "verify --json parses with unpinned OBS_VAULT" 0 \
-        env -u OBS_VAULT bash -c "$OB verify --json 2>/dev/null | python3 -m json.tool >/dev/null"
+        env -u OBS_VAULT bash -c "${OB@Q} verify --json 2>/dev/null | python3 -m json.tool >/dev/null"
 fi
 
 echo "== 31. health --json (machine-readable repository integrity) =="
@@ -908,7 +908,7 @@ assert isinstance(s["git_size_bytes"], int) and s["git_size_bytes"] >= 0, s
 assert isinstance(s["free_space_bytes"], int) and s["free_space_bytes"] >= 0, s
 PY
     t "health --json: ok document parses & shape holds" 0 \
-        bash -c "$OB health --json | python3 '$SB/check-health.py'"
+        bash -c "${OB@Q} health --json | python3 '$SB/check-health.py'"
 else
     echo "  [SKIP] health --json shape checks (python3 not installed)"
 fi
@@ -926,7 +926,7 @@ if command -v python3 >/dev/null 2>&1; then
     git -C "$SB/vault1" remote remove origin
     t "health --json with missing remote -> rc=1 (warn issue)" 1 "$OB" health --json
     t "missing remote document says health_issues, other rows stay ok" 0 \
-        bash -c "$OB health --json 2>/dev/null | python3 -c '
+        bash -c "${OB@Q} health --json 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"result\"] == \"error\" and d[\"error\"][\"code\"] == \"health_issues\", d
@@ -945,7 +945,7 @@ assert d[\"statistics\"][\"commits\"] >= 1, d[\"statistics\"]'"
     printf 'ref: refs/remotes/origin/main\n' > "$SB/vault1/.git/refs/remotes/origin/HEAD"
     t "stale-ref health --json -> rc=1 (two warns, no corruption)" 1 "$OB" health --json
     t "stale ref document: object_database warn with surgical fix" 0 \
-        bash -c "$OB health --json 2>/dev/null | python3 -c '
+        bash -c "${OB@Q} health --json 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"result\"] == \"error\" and d[\"error\"][\"code\"] == \"health_issues\", d
@@ -969,7 +969,7 @@ assert rows[\"head\"][0] == \"ok\" and rows[\"safe_state\"][0] == \"ok\", rows'"
     t "health --json with missing repo -> rc=1" 1 \
         env OBS_VAULT="$SB/ghost-vault" "$OB" health --json
     t "missing repo document: fail row + info rows + null stats" 0 \
-        env OBS_VAULT="$SB/ghost-vault" bash -c "$OB health --json 2>/dev/null | python3 -c '
+        env OBS_VAULT="$SB/ghost-vault" bash -c "${OB@Q} health --json 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"result\"] == \"error\" and d[\"error\"][\"code\"] == \"health_failed\", d
@@ -981,7 +981,7 @@ assert d[\"statistics\"][\"commits\"] is None, d[\"statistics\"]'"
 
     # JSON purity with an unpinned vault (SILENT_UI must hold for health too).
     t "health --json parses with unpinned OBS_VAULT" 0 \
-        env -u OBS_VAULT bash -c "$OB health --json 2>/dev/null | python3 -m json.tool >/dev/null"
+        env -u OBS_VAULT bash -c "${OB@Q} health --json 2>/dev/null | python3 -m json.tool >/dev/null"
 fi
 
 # Backward compatibility: pre-9.0.0 `health` silently ignored all args.
@@ -1015,16 +1015,16 @@ assert full, "no parsed entries at all"
 assert all(e["source"] for e in full), full
 PY
     t "log --json: ok document parses & shape holds" 0 \
-        bash -c "$OB log --json | python3 '$SB/check-log.py'"
+        bash -c "${OB@Q} log --json | python3 '$SB/check-log.py'"
     t "log --json: requested=2 honored" 0 \
-        bash -c "$OB log --json 2 | python3 -c '
+        bash -c "${OB@Q} log --json 2 | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"requested\"] == 2 and d[\"count\"] <= 2, d
 assert d[\"count\"] == len(d[\"entries\"]), d'"
     # Pre-9.1.0 tolerance: a non-numeric count silently means the default.
     t "log --json: non-numeric arg falls back to 20" 0 \
-        bash -c "$OB log --json abc | python3 -c '
+        bash -c "${OB@Q} log --json abc | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"requested\"] == 20, d'"
@@ -1042,7 +1042,7 @@ assert "log --json left no lock behind" bash -c "[[ ! -e '$LOCKDIR' ]]"
 # treating an empty value as unset): log_file null, zero entries, rc 0.
 if command -v python3 >/dev/null 2>&1; then
     t "disabled log: log_file null, count 0, rc 0" 0 \
-        env OBS_LOG= bash -c "$OB log --json | python3 -c '
+        env OBS_LOG= bash -c "${OB@Q} log --json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"log_file\"] is None and d[\"count\"] == 0 and d[\"entries\"] == [], d
@@ -1051,7 +1051,7 @@ fi
 # JSON purity with an unpinned vault (SILENT_UI must hold for log too).
 if command -v python3 >/dev/null 2>&1; then
     t "log --json parses with unpinned OBS_VAULT" 0 \
-        env -u OBS_VAULT bash -c "$OB log --json 2>/dev/null | python3 -m json.tool >/dev/null"
+        env -u OBS_VAULT bash -c "${OB@Q} log --json 2>/dev/null | python3 -m json.tool >/dev/null"
 fi
 
 echo
@@ -1067,7 +1067,7 @@ if command -v python3 >/dev/null 2>&1; then
     # and reported, sidecar not yet checked, nothing mutated).
     t "restore --json without -y -> rc=1" 1 "$OB" restore --json latest
     t "consent document: consent_required + resolved archive" 0 \
-        bash -c "$OB restore --json latest 2>/dev/null | python3 -c '
+        bash -c "${OB@Q} restore --json latest 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"result\"] == \"error\" and d[\"error\"][\"code\"] == \"consent_required\", d
@@ -1078,7 +1078,7 @@ assert d[\"safety_backup\"] is None and d[\"previous_vault\"] is None, d'"
     # Fail-closed targeting: no implicit "latest" guess in JSON mode.
     t "restore --json without target -> rc=1" 1 "$OB" restore --json
     t "target document: target_required, archive null" 0 \
-        bash -c "$OB restore --json 2>/dev/null | python3 -c '
+        bash -c "${OB@Q} restore --json 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"error\"][\"code\"] == \"target_required\" and d[\"archive\"] is None, d'"
@@ -1086,7 +1086,7 @@ assert d[\"error\"][\"code\"] == \"target_required\" and d[\"archive\"] is None,
     # Unknown target.
     t "restore --json ghost.tar.gz -y -> rc=1" 1 "$OB" restore --json ghost.tar.gz -y
     t "unknown target document: backup_not_found" 0 \
-        bash -c "$OB restore --json ghost.tar.gz -y 2>/dev/null | python3 -c '
+        bash -c "${OB@Q} restore --json ghost.tar.gz -y 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"error\"][\"code\"] == \"backup_not_found\", d'"
@@ -1096,7 +1096,7 @@ assert d[\"error\"][\"code\"] == \"backup_not_found\", d'"
     t "restore --json into empty backup dir -> rc=1" 1 \
         env OBS_BACKUP_DIR="$SB/empty-bak" "$OB" restore --json latest -y
     t "empty dir document: no_backups, archive null" 0 \
-        env OBS_BACKUP_DIR="$SB/empty-bak" bash -c "$OB restore --json latest -y 2>/dev/null | python3 -c '
+        env OBS_BACKUP_DIR="$SB/empty-bak" bash -c "${OB@Q} restore --json latest -y 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"error\"][\"code\"] == \"no_backups\" and d[\"archive\"] is None, d'"
@@ -1112,7 +1112,7 @@ assert d[\"error\"][\"code\"] == \"no_backups\" and d[\"archive\"] is None, d'"
         "$OB" restore --json manual-20200101-000000.tar.gz -y
     t "sidecar document: checksum_mismatch, sidecar_ok false" 0 \
         env OBS_VAULT="$SB/vault1-cs" OBS_BACKUP_DIR="$SB/cs-bak" bash -c \
-        "$OB restore --json manual-20200101-000000.tar.gz -y 2>/dev/null | python3 -c '
+        "${OB@Q} restore --json manual-20200101-000000.tar.gz -y 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"error\"][\"code\"] == \"checksum_mismatch\", d
@@ -1125,7 +1125,7 @@ assert d[\"safety_backup\"] is None, d'"
         "$OB" restore --json manual-20200102-000000.tar.gz -y
     t "garbage document: archive_corrupt" 0 \
         env OBS_VAULT="$SB/vault1-cs" OBS_BACKUP_DIR="$SB/cs-bak" bash -c \
-        "$OB restore --json manual-20200102-000000.tar.gz -y 2>/dev/null | python3 -c '
+        "${OB@Q} restore --json manual-20200102-000000.tar.gz -y 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"error\"][\"code\"] == \"archive_corrupt\", d
@@ -1145,7 +1145,7 @@ with tarfile.open('$SB/cs-bak/manual-20200103-000000.tar.gz', 'w:gz') as t:
         "$OB" restore --json manual-20200103-000000.tar.gz -y
     t "symlink document: unsafe_archive" 0 \
         env OBS_VAULT="$SB/vault1-cs" OBS_BACKUP_DIR="$SB/cs-bak" bash -c \
-        "$OB restore --json manual-20200103-000000.tar.gz -y 2>/dev/null | python3 -c '
+        "${OB@Q} restore --json manual-20200103-000000.tar.gz -y 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"error\"][\"code\"] == \"unsafe_archive\", d'"
@@ -1162,7 +1162,7 @@ assert d[\"error\"][\"code\"] == \"unsafe_archive\", d'"
     printf '%s\n' "$$" > "$LOCKDIR/pid"
     t "restore --json under live lock -> rc=2" 2 "$OB" restore --json latest -y
     t "lock document: lock_busy, archive null, rc 2" 0 \
-        bash -c "$OB restore --json latest -y 2>/dev/null | python3 -c '
+        bash -c "${OB@Q} restore --json latest -y 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"result\"] == \"error\" and d[\"error\"][\"code\"] == \"lock_busy\", d
@@ -1174,7 +1174,7 @@ assert d[\"archive\"] is None and d[\"safety_backup\"] is None, d'"
     backups_before=$(ls -1 "$SB/backups"/*.tar.gz 2>/dev/null | wc -l)
     t "restore --json latest -y -> rc=0" 0 "$OB" restore --json latest -y
     t "ok document: full shape holds" 0 \
-        bash -c "$OB restore --json latest -y 2>/dev/null | python3 -c '
+        bash -c "${OB@Q} restore --json latest -y 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"command\"] == \"restore\" and d[\"mode\"] == \"apply\", d
@@ -1220,7 +1220,7 @@ echo "== 34. history --json (machine-readable commit document) =="
 # unterminated final line) — the newest-hash assertions below pin it.
 if command -v python3 >/dev/null 2>&1; then
     t "history --json: ok document parses & shape holds" 0 \
-        bash -c "$OB history --json | python3 -c '
+        bash -c "${OB@Q} history --json | python3 -c '
 import json, re, sys
 d = json.load(sys.stdin)
 assert d[\"command\"] == \"history\" and d[\"error\"] is None, d
@@ -1235,7 +1235,7 @@ for c in d[\"commits\"]:
     # commit (the dropped-newest regression).
     newest_hash=$(git -C "$SB/vault1" rev-parse HEAD)
     t "history --json 2: requested honored, newest commit first" 0 \
-        bash -c "$OB history --json 2 | python3 -c '
+        bash -c "${OB@Q} history --json 2 | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"requested\"] == 2 and d[\"count\"] == 2, d
@@ -1247,13 +1247,13 @@ assert d[\"commits\"][0][\"hash\"] == \"$newest_hash\", d[\"commits\"][0][\"hash
         bash -c "'$OB' history 2>/dev/null | grep -F '$newest_short' | grep -F '$newest_subj' >/dev/null"
     # Pre-9.x tolerance: a non-numeric count silently means the default.
     t "history --json: non-numeric arg falls back to 10" 0 \
-        bash -c "$OB history --json abc | python3 -c '
+        bash -c "${OB@Q} history --json abc | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"requested\"] == 10, d'"
     # The cap stays at 100 even with a huge request.
     t "history --json: request capped at 100" 0 \
-        bash -c "$OB history --json 500 | python3 -c '
+        bash -c "${OB@Q} history --json 500 | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"requested\"] == 100, d'"
@@ -1272,7 +1272,7 @@ assert "history --json left no lock behind" bash -c "[[ ! -e '$LOCKDIR' ]]"
 git init -q -b main "$SB/fresh-hist"
 if command -v python3 >/dev/null 2>&1; then
     t "unborn repo: count 0, commits [], rc 0" 0 \
-        env OBS_VAULT="$SB/fresh-hist" bash -c "$OB history --json | python3 -c '
+        env OBS_VAULT="$SB/fresh-hist" bash -c "${OB@Q} history --json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"error\"] is None and d[\"count\"] == 0 and d[\"commits\"] == [], d'"
@@ -1283,7 +1283,7 @@ mkdir -p "$SB/nogit-dir"
 t "non-repo vault -> rc=1" 1 env OBS_VAULT="$SB/nogit-dir" "$OB" history --json
 if command -v python3 >/dev/null 2>&1; then
     t "non-repo document: history_unreadable" 0 \
-        env OBS_VAULT="$SB/nogit-dir" bash -c "$OB history --json 2>/dev/null | python3 -c '
+        env OBS_VAULT="$SB/nogit-dir" bash -c "${OB@Q} history --json 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"error\"] is not None and d[\"error\"][\"code\"] == \"history_unreadable\", d'"
@@ -1335,9 +1335,9 @@ PY
     printf 'orphan-copy' > "$SB/vault1/collide.png"
     printf 'in-place-copy' > "$SB/vault1/Attachments/collide.png"
     t "organize --json: scan document parses, counters match" 0 \
-        bash -c "$OB organize --json | python3 '$SB/check-org-scan.py' '$SB/vault1'"
+        bash -c "${OB@Q} organize --json | python3 '$SB/check-org-scan.py' '$SB/vault1'"
     t "scan document: orphans include the new file, not the referenced one" 0 \
-        bash -c "$OB organize --json | python3 -c '
+        bash -c "${OB@Q} organize --json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 o = d[\"orphans\"]
@@ -1353,7 +1353,7 @@ assert d[\"moved\"] == [] and d[\"skipped\"] == [], d'"
     # second fix would legitimately move nothing (orphans are already in
     # place), so the document must be validated from the first run.
     t "organize --fix --json -> rc=0 (document captured)" 0 \
-        bash -c "$OB organize --fix --json > '$SB/fix-doc.json' 2>/dev/null"
+        bash -c "${OB@Q} organize --fix --json > '$SB/fix-doc.json' 2>/dev/null"
     t "fix document: moved/skipped report matches disk" 0 \
         python3 -c '
 import json, os, sys
@@ -1395,7 +1395,7 @@ assert not os.path.exists(os.path.join(d["vault"], "fresh-orphan.png")), d' "$SB
     t "organize --json under live lock -> rc=0 (no lock needed)" 0 "$OB" organize --json
     t "organize --fix --json under live lock -> rc=2" 2 "$OB" organize --fix --json
     t "fix lock document: lock_busy, mode fix" 0 \
-        bash -c "$OB organize --fix --json 2>/dev/null | python3 -c '
+        bash -c "${OB@Q} organize --fix --json 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"mode\"] == \"fix\" and d[\"result\"] == \"error\", d
