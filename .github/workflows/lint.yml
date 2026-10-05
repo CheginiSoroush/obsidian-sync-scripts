@@ -69,8 +69,24 @@ jobs:
       # The suite and bin/ob-sync need the GNU toolchain (stat -c, GNU
       # tar/find/grep/sed, coreutils mktemp/du/sha256sum) plus python3 so
       # the JSON shape assertions actually run instead of being skipped.
-      - name: Install git and the GNU toolchain
-        run: apk add --no-cache git tar findutils coreutils grep sed python3
+      #
+      # Those images also ship years-old ca-certificates-bundle snapshots,
+      # while dl-cdn now serves a current Let's Encrypt chain — their apk
+      # cannot build the TLS path and every https fetch dies at step one.
+      # dl-cdn answers plain HTTP too, and apk independently verifies the
+      # RSA-signed index and package checksums: bootstrap over HTTP,
+      # refresh the CA bundle, flip the repos back to https.
+      - name: Bootstrap apk over HTTP and refresh the CA bundle
+        run: |
+          sed -i 's|^https:|http:|' /etc/apk/repositories
+          apk add --no-cache ca-certificates-bundle
+          sed -i 's|^http:|https:|' /etc/apk/repositories
+
+      - name: Install git and the GNU toolchain (https, http fallback)
+        run: |
+          apk add --no-cache git tar findutils coreutils grep sed python3 \
+            || { sed -i 's|^https:|http:|' /etc/apk/repositories
+                 apk add --no-cache git tar findutils coreutils grep sed python3; }
 
       - name: Check out the repository
         uses: actions/checkout@v5
