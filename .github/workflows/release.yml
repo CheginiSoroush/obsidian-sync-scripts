@@ -1,0 +1,78 @@
+# Release automation: a tag push is the single trigger for publishing a
+# GitHub Release. The workflow refuses to publish when the tag and the
+# VERSION constant disagree, so a half-bumped tree can never ship.
+#
+# Release notes are extracted from CHANGELOG.md — the section whose
+# heading matches the pushed version (Keep-a-Changelog format,
+# "## [x.y.z] — Title"). The core script is attached for curl/wget users
+# together with its SHA-256 checksum.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      - name: Verify the tag matches VERSION in bin/ob-sync
+        run: |
+          ver="$(sed -n 's/^readonly VERSION="\(.*\)"$/\1/p' bin/ob-sync)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [[ -z "$ver" ]]; then
+            echo "::error::Could not read VERSION from bin/ob-sync"
+            exit 1
+          fi
+          if [[ "$ver" != "$tag" ]]; then
+            echo "::error::Tag v$tag does not match VERSION $ver in bin/ob-sync"
+            echo "        Bump the script, commit, then re-tag."
+            exit 1
+          fi
+          echo "Tag v$tag matches VERSION — proceeding"
+
+      # The suite is self-contained (local bare remote, isolated HOME).
+      # A release that ships with failing tests is worse than no release.
+      - name: Run the functional test suite
+        run: bash tests/run-tests.sh
+
+      - name: Extract the CHANGELOG section for this release
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v ver="$ver" '
+            $0 ~ "^## \\[" ver "\\]" { found = 1; next }
+            /^## \[/ && found        { exit }
+            found                    { print }
+          ' CHANGELOG.md > release-notes.md
+
+          # Never publish an empty body — fall back to a short summary.
+          if [[ ! -s release-notes.md ]]; then
+            printf 'Release %s\n\nSee CHANGELOG.md for the full history.\n' "$ver" \
+              > release-notes.md
+          fi
+
+          # Trim leading/trailing blank lines for a clean release page.
+          sed -i -e '/./,$!d' release-notes.md
+          printf '\n' >> release-notes.md
+
+      - name: Attach the core script and its checksum
+        run: |
+          cp bin/ob-sync ob-sync
+          sha256sum ob-sync > ob-sync.sha256
+
+      - name: Publish the release
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "ob-sync ${GITHUB_REF_NAME#v}" \
+            --notes-file release-notes.md \
+            ob-sync ob-sync.sha256
+        env:
+          GH_TOKEN: ${{ github.token }}

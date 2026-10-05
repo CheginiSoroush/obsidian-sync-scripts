@@ -1,0 +1,17 @@
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+*.swp
+*~
+.idea/
+.vscode/
+
+# Runtime artifacts — never commit these
+*.log
+*.log.*
+*.part
+obsidian-backups/
+

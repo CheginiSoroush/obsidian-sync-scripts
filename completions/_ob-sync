@@ -1,0 +1,172 @@
+#compdef ob-sync
+# ─────────────────────────────────────────────────────────────────────────────
+#   zsh completion for ob-sync
+#
+#   Install (pick one):
+#     oh-my-zsh : mkdir -p ~/.oh-my-zsh/completions &&
+#                 cp completions/_ob-sync ~/.oh-my-zsh/completions/
+#                 (restart the shell; fpath already covers this directory)
+#     per-user  : mkdir -p ~/.zsh/completions &&
+#                 cp completions/_ob-sync ~/.zsh/completions/
+#                 then in ~/.zshrc, BEFORE compinit:
+#                   fpath=(~/.zsh/completions $fpath)
+#     quick     : fpath=(/path/to/ob-sync/completions $fpath) && compinit
+#
+#   No external dependencies — plain zsh completion system (compinit).
+#   Mirrors `ob-sync help` (v9.2.0): every command, subcommand, preset
+#   and flag, so tab completion always agrees with the documentation.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ob_sync_commands() {
+    local -a commands
+    commands=(
+        'sync:Commit local changes, then integrate remote updates'
+        'pull:Commit local changes, then integrate remote updates'
+        'push:Commit local changes, then push to the remote'
+        'quick:Verified backup + full sync in one step'
+        'backup:Create and verify a full vault backup (--json for scripts)'
+        'restore:Restore from a backup (latest, name, or path)'
+        'verify:Verify the integrity of every stored backup (--json for scripts)'
+        'repair:Rebuild git metadata from remote (files preserved)'
+        'organize:Audit the vault; --fix moves orphaned attachments (--json for scripts)'
+        'diff:Show pending working-tree changes (read-only)'
+        'history:Show the last n vault commits (--json for scripts)'
+        'config:Show the effective configuration and its sources'
+        'status:Show vault, git and backup overview (--json for scripts)'
+        'health:Deep repository integrity check (--json for scripts)'
+        'doctor:Diagnose platform, tools, storage, remote and watchdog (--json for scripts)'
+        'init:First-time setup: clone or adopt an existing vault'
+        'remote:Show the remote URL, or set and persist a new one'
+        'cron:Scheduled syncs: status, install, show, uninstall'
+        'edit-conf:Edit the config file in $EDITOR'
+        'menu:Launch the interactive menu'
+        'log:Show the last n log entries (--json for scripts)'
+        'help:Show help'
+        'version:Show version information'
+    )
+    _describe -t commands 'ob-sync command' commands
+}
+
+_ob_sync_cron() {
+    local -a subs
+    subs=(
+        'status:Show scheduling status (default)'
+        'install:Install or update the scheduled sync'
+        'show:Print the managed crontab block'
+        'uninstall:Remove the scheduled sync'
+    )
+    _describe -t subcommands 'cron subcommand' subs
+}
+
+_ob_sync_cron_schedules() {
+    local -a presets
+    presets=(
+        '15min:sync every 15 minutes'
+        '30min:sync every 30 minutes'
+        'hourly:sync at the top of every hour'
+        'daily:sync daily (default 03:00, or add HH:MM)'
+    )
+    _describe -t schedules 'schedule preset' presets
+}
+
+_ob_sync() {
+    # Global options, valid before or after the command.
+    local -a global_opts
+    global_opts=(
+        '(-y --yes)'{-y,--yes}'[assume yes for all interactive prompts]'
+        '(-n --no-color)'{-n,--no-color}'[disable colored output]'
+        '(-h --help)'{-h,--help}'[show help]'
+        '(-v --version)'{-v,--version}'[show version information]'
+    )
+
+    _arguments -C \
+        "$global_opts[@]" \
+        '1:command:->cmds' \
+        '*::argument:->args'
+
+    case "$state" in
+        cmds)
+            _ob_sync_commands
+            ;;
+        args)
+            case "$words[1]" in
+                sync|pull|push|quick|backup)
+                    _arguments \
+                        '--json[emit a machine-readable result document]' \
+                        '(-y --yes)'{-y,--yes}'[assume yes (never prompts)]'
+                    ;;
+                restore)
+                    _arguments \
+                        '--list[preview backup contents instead of restoring]' \
+                        '--dry-run[rehearse the restore, change nothing]' \
+                        '--json[machine-readable output: preview with --list, restore result with -y]' \
+                        '(-y --yes)'{-y,--yes}'[assume yes]' \
+                        '1:target:(latest)'
+                    ;;
+                cron)
+                    # In this branch $words[1] is 'cron'; the subcommand
+                    # (or the word being completed) is $words[2].
+                    case "$words[2]" in
+                        install)
+                            _arguments \
+                                '1:schedule:->scheds' \
+                                '2:time [HH:MM]:'
+                            ;;
+                        uninstall)
+                            _arguments \
+                                '(-y --yes)'{-y,--yes}'[assume yes]'
+                            ;;
+                        *)
+                            _ob_sync_cron
+                            ;;
+                    esac
+                    ;;
+                status)
+                    _arguments '--json[machine-readable output]'
+                    ;;
+                doctor)
+                    _arguments '--json[machine-readable diagnostics report]'
+                    ;;
+                verify)
+                    _arguments \
+                        '--json[emit a machine-readable verification report]' \
+                        '(-y --yes)'{-y,--yes}'[assume yes (never prompts)]'
+                    ;;
+                health)
+                    _arguments \
+                        '--json[emit a machine-readable integrity report]' \
+                        '(-y --yes)'{-y,--yes}'[assume yes (never prompts)]'
+                    ;;
+                organize)
+                    _arguments \
+                        '--fix[apply the suggested cleanup]' \
+                        '--json[emit a machine-readable audit report]' \
+                        '(-y --yes)'{-y,--yes}'[assume yes (never prompts)]'
+                    ;;
+                history)
+                    _arguments \
+                        '--json[emit a machine-readable commit document]' \
+                        '1:count:(5 10 20 50 100)'
+                    ;;
+                log)
+                    _arguments \
+                        '--json[emit a machine-readable activity document]' \
+                        '1:count:(5 10 20 50 100)'
+                    ;;
+                remote)
+                    _arguments '1:url:'
+                    ;;
+                backup|repair|diff|config|init|edit-conf|menu|help|version)
+                    # No command-specific arguments.
+                    ;;
+            esac
+            ;;
+    esac
+
+    case "$state" in
+        scheds) _ob_sync_cron_schedules ;;
+    esac
+    return 0
+}
+
+_ob_sync "$@"

@@ -1,0 +1,97 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck (pinned v0.11.0)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      # Pin the exact ShellCheck release so CI and local runs behave
+      # identically. Runner images ship an older version whose SC2120
+      # differs from 0.11.0 — that version skew is what let a passing
+      # local lint fail the gate.
+      - name: Install ShellCheck 0.11.0
+        run: |
+          scdir=/tmp/shellcheck-0.11.0
+          mkdir -p "$scdir"
+          curl -fsSL \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz \
+            | tar -xJ -C "$scdir" --strip-components=1
+          echo "$scdir" >> "$GITHUB_PATH"
+
+      - name: Show ShellCheck version
+        run: shellcheck --version
+
+      # Warnings and above — informational/style findings are tolerated.
+      # The codebase is written to pass this gate; keep it that way.
+      - name: Lint all shell scripts
+        run: |
+          shellcheck -x -S warning \
+            bin/ob-sync \
+            mobile/install.sh \
+            desktop/install.sh \
+            completions/ob-sync.bash \
+            tests/run-tests.sh
+
+  test:
+    name: Functional test suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      # The suite is fully self-contained (throwaway sandbox, local bare
+      # remote, isolated HOME/TMPDIR) — it needs nothing but git and bash.
+      - name: Run tests/run-tests.sh
+        run: bash tests/run-tests.sh
+
+  test-bash-matrix:
+    name: Functional suite on bash ${{ matrix.bash }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The support floor (4.4, associative arrays, ${var,,}) and a
+        # current release — ob-sync targets everything from old Termux
+        # bash builds to modern desktops.
+        bash: ["4.4", "5.2"]
+    container: bash:${{ matrix.bash }}
+    steps:
+      # The bash:N images are Alpine-based: busybox utilities and no git.
+      # The suite and bin/ob-sync need the GNU toolchain (stat -c, GNU
+      # tar/find/grep/sed, coreutils mktemp/du/sha256sum) plus python3 so
+      # the JSON shape assertions actually run instead of being skipped.
+      - name: Install git and the GNU toolchain
+        run: apk add --no-cache git tar findutils coreutils grep sed python3
+
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      - name: Show bash version
+        run: bash --version | head -n 1
+
+      - name: Run tests/run-tests.sh
+        run: bash tests/run-tests.sh
+
+  markdownlint:
+    name: markdownlint-cli2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      # Reads .markdownlint.json from the repo root — the same file that
+      # silences the editor warnings. One source of truth for the rules.
+      - name: Lint all Markdown files
+        uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          globs: "**/*.md"
+
