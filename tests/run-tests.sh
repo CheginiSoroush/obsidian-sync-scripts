@@ -1404,6 +1404,47 @@ assert d[\"moved\"] == [] and d[\"skipped\"] == [], d'"
     rm -rf -- "$LOCKDIR"
     # The refused fix must not have moved anything.
     assert "locked fix moved nothing" test -f "$SB/vault1/collide.png"
+
+    # ---- 9.2.1 regressions ------------------------------------------------
+    # The empty-notes scan was lost in the 9.2.0 refactor — organize kept
+    # printing "No empty notes" and empty_notes stayed [] whatever the
+    # vault held. Same criteria as pre-9.2.0: markdown under 10 bytes.
+    printf 'ab' > "$SB/vault1/tiny-note.md"
+    t "organize --json: empty-notes scan is alive (9.2.1)" 0 \
+        bash -c "${OB@Q} organize --json | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d[\"empty_notes\"] == [\"tiny-note.md\"], d'"
+    assertout "human organize reports the empty note" \
+        "empty or near-empty note" "$OB" organize
+    rm -f "$SB/vault1/tiny-note.md"
+    t "organize --json: empty-notes list empties with the fixture" 0 \
+        bash -c "${OB@Q} organize --json | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d[\"empty_notes\"] == [], d'"
+
+    # Positional arguments after "--" must fail closed (the parser used
+    # to silently drop them and run a scan).
+    t "organize -- --fix -> rc=1 (no silent scan)" 1 "$OB" organize -- --fix
+
+    # Lock routing stops at the "--" separator: a target literally named
+    # "--list" routes to the LOCKED apply flow, not the lock-free preview.
+    printf 'x' > "$SB/backups/--list"
+    t "restore -- --list routes to apply -> rc=1 without consent" 1 \
+        bash -c "${OB@Q} restore -- --list </dev/null"
+    rm -f "$SB/backups/--list"
+
+    # The preview must not claim a checksum verification that never ran:
+    # without a sidecar the honest line is the "No checksum sidecar" one.
+    LATEST=$("$OB" restore --list --json 2>/dev/null | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["backups"][0]["path"])')
+    rm -f "$LATEST.sha256"
+    assertout "no-sidecar preview no longer claims a checksum" \
+        "No checksum sidecar" "$OB" restore --list latest
+    assertout "no-sidecar JSON preview reports sidecar false" \
+        '"sidecar": false' "$OB" restore --list --json latest
 else
     echo "  [SKIP] organize --json checks (python3 not installed)"
 fi

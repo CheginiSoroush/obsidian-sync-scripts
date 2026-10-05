@@ -35,6 +35,40 @@
 #                             helpers, never in forks of this script
 #       · Graceful failure  — errors report and return; nothing exits silently
 #
+#   RELEASE NOTES — 9.2.1 (preview throughput & a lost scan restored)
+#       · organize regression fix: the 9.2.0 refactor that extracted
+#         organize_scan() for the JSON document accidentally dropped
+#         the empty-notes pass — every audit since 9.2.0 answered
+#         "No empty notes" regardless of the vault. The scan is back,
+#         byte-for-byte the pre-9.2.0 criteria (markdown files under
+#         10 bytes, .git/.obsidian/.trash excluded), feeding both the
+#         human report and the empty_notes[] array.
+#       · restore previews no longer decompress the same archive six
+#         times: the integrity gate, the tar-slip audit and the member
+#         statistics now share one cached pair of listings (names +
+#         types), so `restore --list` / `--dry-run` / the JSON preview
+#         read the stream exactly twice (phone battery says thanks).
+#         The listing reads also run under OBS_LOCAL_TIMEOUT now, the
+#         same policy `verify` already had.
+#       · restore --list no longer claims "Checksum sidecar valid"
+#         when the archive has NO sidecar — the stream check is all
+#         that ran, and the line now says so.
+#       · organize's orphan scan folds its references into an
+#         associative array (one grep total) instead of one grep
+#         process per attachment; same case-insensitive name match.
+#       · dispatch lock-routing fix: `restore -- --list` (a target
+#         literally named "--list" after the "--" separator) was
+#         misrouted to the lock-free preview and bypassed the PID lock;
+#         the routing scan now stops at "--" (same for organize --fix).
+#         organize also rejects leftover positional args after "--"
+#         instead of silently running a scan.
+#       · fsck counting fix: `$(grep -c … || printf '0')` produced a
+#         two-line "0\n0" whenever grep matched nothing, tripping a
+#         visible "syntax error in expression" on stderr; the counts
+#         are now assigned first with a plain fallback.
+#       · doctor --json: the default-branch probe leaked a global
+#         variable (the human twin declared it local).
+#
 #   RELEASE NOTES — 9.2.0 (history & organize join the machine surface)
 #       · New `history --json [n]`: the vault's commit history becomes a
 #         document — commits[{hash,date,author,subject}] with full SHA-1
@@ -279,7 +313,7 @@ set -uo pipefail
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.2.0"
+readonly VERSION="9.2.1"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -1117,6 +1151,57 @@ prune_backups() {
     return 0
 }
 
+#
+# Archive listing cache (performance, 9.2.1).
+#
+# Preview flows used to decompress the SAME archive up to six times —
+# the integrity gate, the two tar-slip audit passes, the member
+# statistics and the top-level layout each ran their own tar. The
+# cache holds the two listings every consumer needs — plain names
+# (tar -tzf) and verbose lines (tar -tvzf, whose first character is the
+# member type) — decompressed exactly once per archive, under the
+# local watchdog (the same policy verify's stream check already had).
+# Files are registered temporaries: swept on every exit path,
+# interruption included. Keyed by archive path so the interactive
+# menu, which can preview several archives in one process, never
+# reuses a stale listing (ob-sync's own archives are write-once).
+#
+# @param $1  archive path
+# @return    0 cache ready (built or reused), 1 the stream is unreadable
+##
+TAR_CACHE_FOR=""
+TAR_CACHE_NAMES=""
+TAR_CACHE_TYPES=""
+
+tar_listing_cache() {
+    local archive="$1"
+    if [[ "$TAR_CACHE_FOR" == "$archive" && -n "$TAR_CACHE_NAMES" \
+          && -f "$TAR_CACHE_NAMES" && -f "$TAR_CACHE_TYPES" ]]; then
+        return 0
+    fi
+
+    local names types
+    names=$(mktemp) || return 1
+    types=$(mktemp) || { rm -f -- "$names"; return 1; }
+    temp_register "$names" "$types"
+
+    if ! run_local_timeout tar -tzf "$archive" > "$names" 2>/dev/null; then
+        rm -f -- "$names" "$types"
+        TAR_CACHE_FOR="" TAR_CACHE_NAMES="" TAR_CACHE_TYPES=""
+        return 1
+    fi
+    if ! run_local_timeout tar -tvzf "$archive" > "$types" 2>/dev/null; then
+        rm -f -- "$names" "$types"
+        TAR_CACHE_FOR="" TAR_CACHE_NAMES="" TAR_CACHE_TYPES=""
+        return 1
+    fi
+
+    TAR_CACHE_FOR="$archive"
+    TAR_CACHE_NAMES="$names"
+    TAR_CACHE_TYPES="$types"
+    return 0
+}
+
 ##
 # Audit an archive for members that are unsafe to extract, blocking the
 # classic tar-slip vectors:
@@ -1141,6 +1226,10 @@ check_archive_safe() {
     # Pass 1 — every entry name must be relative and free of ".."
     # components. Prepending/trailing slashes normalize edge cases so a
     # single case pattern catches "..", "../x", "a/../b" and "a/..".
+    # Listings come from the shared cache (9.2.1) — the audit used to
+    # re-decompress the stream twice on its own.
+    tar_listing_cache "$archive" || return 1
+
     while IFS= read -r entry; do
         [[ -z "$entry" ]] && continue
         (( count++ ))
@@ -1154,7 +1243,7 @@ check_archive_safe() {
                 return 1
                 ;;
         esac
-    done < <(tar -tzf "$archive" 2>/dev/null)
+    done < "$TAR_CACHE_NAMES"
 
     if (( count == 0 )); then
         error "Archive is empty"
@@ -1172,7 +1261,7 @@ check_archive_safe() {
                 return 1
                 ;;
         esac
-    done < <(tar -tvzf "$archive" 2>/dev/null)
+    done < "$TAR_CACHE_TYPES"
 
     return 0
 }
@@ -1317,8 +1406,13 @@ fsck_object_db() {
         return 0
     fi
     rc=$?
-    total=$(grep -c '^error:' <<< "$out" 2>/dev/null || printf '0')
-    broken=$(grep -c '^error: refs/remotes/.*invalid sha1 pointer' <<< "$out" 2>/dev/null || printf '0')
+    # grep -c prints its (possibly zero) count to stdout AND exits 1 on
+    # zero matches — `$(grep -c … || printf '0')` therefore captured a
+    # two-line "0\n0" whenever fsck failed without matching lines, and
+    # the arithmetic below then tripped a visible "syntax error in
+    # expression" on stderr (9.2.1). Assign first, fall back on failure.
+    total=$(grep -c '^error:' <<< "$out" 2>/dev/null) || total=0
+    broken=$(grep -c '^error: refs/remotes/.*invalid sha1 pointer' <<< "$out" 2>/dev/null) || broken=0
     if (( total > 0 && broken == total )); then
         refs=$(grep -oE 'refs/remotes/[^:]+' <<< "$out" | sort -u | tr '\n' ' ')
         FSCK_DETAIL="${refs% }"
@@ -2481,15 +2575,26 @@ restore_preview() {
     local archive="$1"
 
     step "Verifying archive integrity"
-    if ! tar -tzf "$archive" >/dev/null 2>&1; then
+    # One decompression of each listing (see tar_listing_cache) serves
+    # the integrity gate, the member audit and the statistics below —
+    # the pre-9.2.1 preview re-read the same stream six times.
+    if ! tar_listing_cache "$archive"; then
         error "Archive is unreadable or corrupt"
         return 1
     fi
-    if ! verify_sidecar "$archive"; then
-        error "Checksum mismatch — archive may be corrupted"
-        return 1
+    if [[ -f "${archive}.sha256" ]]; then
+        if verify_sidecar "$archive"; then
+            success "Checksum sidecar valid (sha256)"
+        else
+            error "Checksum mismatch — archive may be corrupted"
+            return 1
+        fi
+    else
+        # No sidecar to verify against: the stream check above is the
+        # only integrity signal that ran (9.2.1 — the line used to
+        # claim a checksum verification that never happened).
+        info "No checksum sidecar — stream integrity verified only"
     fi
-    success "Checksum sidecar valid (sha256)"
 
     step "Auditing archive members"
     check_archive_safe "$archive" || return 1
@@ -2501,13 +2606,13 @@ restore_preview() {
         [[ -z "$entry" ]] && continue
         members=$((members + 1))
         [[ "${entry##*/}" == *.md ]] && notes=$((notes + 1))
-    done < <(tar -tzf "$archive" 2>/dev/null)
+    done < "$TAR_CACHE_NAMES"
     while IFS= read -r line; do
         case "$line" in
             -*) files=$((files + 1)) ;;
             d*) dirs=$((dirs + 1)) ;;
         esac
-    done < <(tar -tvzf "$archive" 2>/dev/null)
+    done < "$TAR_CACHE_TYPES"
     success "All members audited — nothing suspicious"
 
     echo
@@ -2520,7 +2625,7 @@ restore_preview() {
 
     # Top-level layout — the 10-second sanity check before a full restore.
     local top
-    top=$(tar -tzf "$archive" 2>/dev/null | sed 's|^\./||' | cut -d/ -f1 | sort -u | head -n 12)
+    top=$(sed 's|^\./||' "$TAR_CACHE_NAMES" | cut -d/ -f1 | sort -u | head -n 12)
     if [[ -n "$top" ]]; then
         echo
         printf '  %s%s%s\n' "$C_BOLD" "Top level" "$C_RESET"
@@ -2596,7 +2701,10 @@ restore_json_preview() {
     local archive="$1"
     local j_err=""
 
-    if ! tar -tzf "$archive" >/dev/null 2>&1; then
+    # tar_listing_cache decompresses each listing ONCE (the pre-9.2.1
+    # preview re-read the stream six times) and doubles as the
+    # integrity gate for the error document below.
+    if ! tar_listing_cache "$archive"; then
         j_err="archive is unreadable or corrupt"
     elif ! verify_sidecar "$archive"; then
         j_err="checksum mismatch — archive may be corrupted"
@@ -2617,13 +2725,13 @@ restore_json_preview() {
         [[ -z "$entry" ]] && continue
         members=$((members + 1))
         [[ "${entry##*/}" == *.md ]] && notes=$((notes + 1))
-    done < <(tar -tzf "$archive" 2>/dev/null)
+    done < "$TAR_CACHE_NAMES"
     while IFS= read -r line; do
         case "$line" in
             -*) files=$((files + 1)) ;;
             d*) dirs=$((dirs + 1)) ;;
         esac
-    done < <(tar -tvzf "$archive" 2>/dev/null)
+    done < "$TAR_CACHE_TYPES"
 
     local sc="false" sc_ok="null"
     if [[ -f "${archive}.sha256" ]]; then
@@ -2635,7 +2743,7 @@ restore_json_preview() {
     local t
     while IFS= read -r t; do
         [[ -n "$t" ]] && top+=("$t")
-    done < <(tar -tzf "$archive" 2>/dev/null | sed 's|^\./||' | cut -d/ -f1 | sort -u | head -n 12)
+    done < <(sed 's|^\./||' "$TAR_CACHE_NAMES" | cut -d/ -f1 | sort -u | head -n 12)
 
     printf '{\n'
     printf '  "archive": { "name": "%s", "path": "%s", "size_bytes": %s, "sidecar": %s, "sidecar_ok": %s },\n' \
@@ -2894,7 +3002,11 @@ cmd_restore() {
     fi
 
     step "Verifying archive integrity"
-    if ! tar -tzf "$archive" >/dev/null 2>&1; then
+    # Build the listing cache here (one -tzf + one -tvf read): the gate
+    # keeps its rc contract and check_archive_safe reuses both listings
+    # below (the pre-9.2.1 apply flow decompressed the stream three
+    # times before extraction).
+    if ! tar_listing_cache "$archive"; then
         restore_fail "archive_corrupt" "Archive is unreadable or corrupt"
         return 1
     fi
@@ -3649,7 +3761,17 @@ cmd_organize() {
             # -y is a no-op (organize never prompts) but accepted so the
             # `ob-sync <cmd> -y` muscle memory keeps working.
             -y|--yes) :; shift ;;
-            --)       shift; break ;;
+            --)       shift
+                      # organize takes no positional arguments — neither
+                      # before nor after the "--" separator. The pre-9.2.1
+                      # parser silently DROPPED anything after "--"
+                      # (`organize -- --fix` ran an innocent scan).
+                      if (( $# > 0 )); then
+                          error "Unexpected argument for organize: $1"
+                          warn "Usage: ob-sync organize [--fix] [--json]"
+                          return 1
+                      fi
+                      break ;;
             -*)       error "Unknown option for organize: $1"
                       warn "Usage: ob-sync organize [--fix] [--json]"
                       return 1 ;;
@@ -3719,6 +3841,18 @@ organize_scan() {
                 -not -path '*/.git/*' -not -path '*/.obsidian/*' \
                 -not -path '*/.trash/*' -print0 2>/dev/null)
 
+    # Empty or near-empty notes (restored 9.2.1): the 9.2.0 refactor that
+    # extracted this scan for the JSON document dropped the pass entirely —
+    # every audit since then answered "No empty notes" regardless of the
+    # vault. Criteria identical to the pre-9.2.0 command (v8.0.0): markdown
+    # files with fewer than 10 bytes of content, with the .trash exclusion
+    # the 8.3.0 fix added.
+    while IFS= read -r -d '' f; do
+        ORG_EMPTY+=("${f#"$VAULT"/}")
+    done < <(find "$VAULT" -name '*.md' -type f -size -10c \
+                -not -path '*/.git/*' -not -path '*/.obsidian/*' \
+                -not -path '*/.trash/*' -print0 2>/dev/null)
+
     while IFS= read -r -d '' f; do
         ORG_OVERSIZED+=("$(printf '%s\x1f%s' "${f#"$VAULT"/}" "$(file_size_of "$f")")")
     done < <(find "$VAULT" -type f -size +5M \
@@ -3726,23 +3860,28 @@ organize_scan() {
 
     # Index every attachment-like filename mentioned inside any note
     # (covers both [[wiki]] embeds and standard [markdown](links)).
-    local refs
-    refs=$(mktemp) || {
-        error "Failed to create temp file"
-        ORG_ERR_CODE="scan_failed"
-        ORG_ERR_MSG="Failed to create temp file"
-        return 1
-    }
-    temp_register "$refs"
-
-    grep -rhoE --include='*.md' --exclude-dir=.git \
+    #
+    # PERFORMANCE (9.2.1): the references are folded into an associative
+    # array once — keyed on the lowercased name, the same case-insensitive
+    # whole-name match the per-file `grep -iFx` performed — so the
+    # membership check is a hash lookup instead of one grep process per
+    # attachment. A vault with hundreds of attachments no longer forks
+    # hundreds of greps (and burns phone battery) during an audit. Case
+    # folding is ASCII (`tr`/`${var,,}`) — exactly what `grep -i` does in
+    # the C locales Termux and cron shells run under.
+    local -A referenced=()
+    local m
+    while IFS= read -r m; do
+        [[ -n "$m" ]] && referenced["$m"]=1
+    done < <(grep -rhoE --include='*.md' --exclude-dir=.git \
         '[A-Za-z0-9][A-Za-z0-9 ._()-]*\.(png|jpe?g|gif|webp|svg|bmp|pdf|mp3|wav|ogg|m4a|mp4|mov|mkv|avi|zip)' \
-        "$VAULT" 2>/dev/null | sort -u > "$refs"
+        "$VAULT" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sort -u)
 
+    local base
     for f in "${attach_files[@]}"; do
-        grep -qiFx -- "${f##*/}" "$refs" || ORG_ORPHANS+=("$f")
+        base=${f##*/}
+        [[ -n "${referenced[${base,,}]:-}" ]] || ORG_ORPHANS+=("$f")
     done
-    rm -f -- "$refs"
     return 0
 }
 
@@ -4228,6 +4367,7 @@ cmd_doctor_json() {
 
     # Remote default branch (only meaningful when the remote answered)
     if [[ -n "$url" ]] && [[ "$j_remote" != "null" ]]; then
+        local default_branch
         default_branch=$(run_with_timeout git ls-remote --symref "$url" HEAD 2>/dev/null \
             | awk '/^ref:/ { sub(/refs\/heads\//, "", $2); print $2; exit }')
         if [[ -n "$default_branch" ]]; then
@@ -5343,12 +5483,12 @@ cmd_config() {
     kv "Branch" "$BRANCH"
     kv "Network watchdog" "$(
         if (( GIT_TIMEOUT == 0 )); then printf 'disabled (OBS_GIT_TIMEOUT=0)'
-        elif (( HAS_TIMEOUT )); then printf "active (${GIT_TIMEOUT}s)"
+        elif (( HAS_TIMEOUT )); then printf 'active (%ss)' "$GIT_TIMEOUT"
         else printf "inactive ('timeout' not found)"
         fi)"
     kv "Local watchdog" "$(
         if (( LOCAL_TIMEOUT == 0 )); then printf 'disabled (OBS_LOCAL_TIMEOUT=0)'
-        elif (( HAS_TIMEOUT )); then printf "active (${LOCAL_TIMEOUT}s)"
+        elif (( HAS_TIMEOUT )); then printf 'active (%ss)' "$LOCAL_TIMEOUT"
         else printf "inactive ('timeout' not found)"
         fi)"
 
@@ -5689,11 +5829,20 @@ dispatch() {
             # Read-only preview flows (--list / --dry-run) need no lock;
             # anything else is a destructive apply — serialized, whether
             # or not --json was passed (9.1.0: apply-mode --json used to
-            # slip past this routing and bypass the PID lock).
-            case " $* " in
-                *" --list "*|*" --dry-run "*) cmd_restore "$@" ;;
-                *)                           with_lock cmd_restore "$@" ;;
-            esac ;;
+            # slip past this routing and bypass the PID lock). The scan
+            # stops at a "--" separator — everything after it is a
+            # POSITIONAL target, so `restore -- --list` (a backup
+            # literally named "--list") routes to the locked apply flow
+            # instead of the lock-free preview (9.2.1).
+            local r_locked=1 r_arg
+            for r_arg in "$@"; do
+                [[ "$r_arg" == "--" ]] && break
+                case "$r_arg" in
+                    --list|--dry-run) r_locked=0 ;;
+                esac
+            done
+            if (( r_locked )); then with_lock cmd_restore "$@"
+                           else       cmd_restore "$@" ; fi ;;
         repair)       require_git && require_vault && with_lock cmd_repair "$@" ;;
         organize)
             require_vault || return 1
@@ -5701,11 +5850,16 @@ dispatch() {
             # as restore --list: it neither mutates the vault nor needs
             # the lock, so a report can be produced even while a sync
             # holds it. organize --fix is destructive and always
-            # serialized through the lock.
-            case " $* " in
-                *" --fix "*) with_lock cmd_organize "$@" ;;
-                *)           cmd_organize "$@" ;;
-            esac ;;
+            # serialized through the lock. A "--fix" after a "--"
+            # separator is a positional (and organize accepts none), so
+            # the scan stops at "--" (9.2.1).
+            local o_fix=0 o_arg
+            for o_arg in "$@"; do
+                [[ "$o_arg" == "--" ]] && break
+                [[ "$o_arg" == "--fix" ]] && o_fix=1
+            done
+            if (( o_fix )); then with_lock cmd_organize "$@"
+                         else       cmd_organize "$@" ; fi ;;
         init)         require_git && with_lock cmd_init ;;
         remote)       with_lock cmd_remote "$@" ;;
 

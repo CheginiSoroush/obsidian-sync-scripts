@@ -4,6 +4,75 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.2.1] — A lost scan, preview throughput & lock-routing corners
+
+### Fixed
+
+- **`organize` never reported empty notes** — the 9.2.0 refactor that
+  extracted `organize_scan()` for the JSON document accidentally
+  dropped the empty-notes pass, so every audit since 9.2.0 answered
+  "No empty notes" regardless of the vault (and `empty_notes: []`
+  in the document) — while the human report, the help text and the
+  JSON contract all still advertised the feature. The scan is back
+  with the exact pre-9.2.0 criteria (markdown files with fewer than
+  10 bytes of content, `.git`/`.obsidian`/`.trash` excluded), feeding
+  both the human view and the `empty_notes[]` array.
+- **`restore --list` claimed a checksum verification that never ran** —
+  `verify_sidecar` returns success both for a valid sidecar AND for
+  "no sidecar at all", so the preview printed
+  "Checksum sidecar valid (sha256)" for archives that had none. The
+  line is now conditional: archives without a sidecar report
+  "No checksum sidecar — stream integrity verified only" instead.
+- **`doctor --json` leaked a global** — the default-branch probe
+  assigned `default_branch` without `local` (the human twin declared
+  it), polluting the environment for everything that ran after it.
+- **fsck counting mangled zero** — `$(grep -c … || printf '0')`
+  captures grep's printed count (0) AND the fallback's 0 whenever grep
+  matches nothing, leaving a two-line `0\n0` in the variable; the
+  arithmetic below then tripped a visible
+  "syntax error in expression" on stderr whenever fsck failed without
+  matching error lines (watchdog trip, hard abort). Counts are now
+  assigned first with a plain fallback.
+- **`organize` silently dropped positional arguments after `--`** —
+  `organize -- --fix` parsed the `--`, ignored what followed and ran
+  an innocent scan instead of failing closed like every other stray
+  positional. The parser now rejects leftover arguments after the
+  separator (same contract as `organize oops`).
+- **dispatch lock-routing scanned past `--`** — `restore -- --list`
+  (a target literally named `--list` behind the end-of-options
+  separator) matched the substring routing check and was sent down
+  the lock-free preview path while the parser treated it as a
+  destructive apply — a lock bypass for a pathological name. Both the
+  restore and organize routing now stop their flag scan at `--`, so
+  everything after the separator routes to the locked apply flow.
+
+### Changed — Performance
+
+- **Restore previews decompress the archive twice, not six times.**
+  `restore --list`, `--dry-run` and `restore --list --json` used to
+  read the same stream up to six times (integrity gate, two tar-slip
+  audit passes, member statistics, top-level layout — each with its
+  own `tar`). A shared listing cache (`tar_listing_cache`) now holds
+  the plain-name and verbose-type listings, decompressed exactly once
+  per archive and reused by every consumer, including the apply flow's
+  audit (three reads → two). The listing reads also run under
+  `OBS_LOCAL_TIMEOUT` now — the same policy `verify` already had — so
+  a hung mount cannot freeze a preview either.
+- **`organize`'s orphan scan runs one grep, not one per attachment.**
+  The references are folded into an associative array keyed on the
+  lowercased name (the same case-insensitive whole-name match the
+  per-file `grep -iFx` performed), turning the membership check into
+  a hash lookup — a vault with hundreds of attachments no longer
+  forks hundreds of grep processes on a phone.
+
+### Tests
+
+- New regression coverage: the restored empty-notes scan (fixture
+  under 10 bytes, human + `--json`), the no-sidecar preview wording
+  (human + document fields), `organize -- --fix` and `restore --
+  --list` fail-closed/locked routing, and the `organize --json`
+  document shape stays intact with the new scan active.
+
 ## [9.2.0] — History & organize join the machine surface
 
 ### Added

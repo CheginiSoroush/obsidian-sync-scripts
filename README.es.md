@@ -10,7 +10,7 @@
 
 <img src="docs/typing.svg" alt="Animación de máquina de escribir que cicla entre: Tu vault. Cada dispositivo. Siempre en sync. · Backups con checksum. Restores ensayados. · Listo para cron. JSON nativo. Amable con humanos. · Sin daemon. Sin lock-in. Solo Git." width="760">
 
-[![Version](https://img.shields.io/badge/version-9.2.0-00B4D8?style=for-the-badge&logo=semver&logoColor=white)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-9.2.1-00B4D8?style=for-the-badge&logo=semver&logoColor=white)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-00C896?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20macOS-3DDC84?style=for-the-badge&logo=android&logoColor=white)](#-inicio-rápido)
 [![Shell](https://img.shields.io/badge/shell-Bash%204%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
