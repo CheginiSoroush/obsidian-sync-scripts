@@ -33,6 +33,14 @@ _ob_sync() {
         return 0
     fi
 
+    # 'cron' owns its own subcommands — the per-command flags below
+    # belong to the top-level commands only ('cron status --json' and
+    # friends are dropped by the parser), so under cron complete only
+    # the subcommand word itself and the install presets.
+    if [[ "${COMP_WORDS[1]}" == "cron" && "$prev" != "cron" && "$prev" != "install" ]]; then
+        return 0
+    fi
+
     case "$prev" in
         sync|pull|push|quick|backup|verify|health)
             # machine-readable result for cron wrappers / CI
@@ -101,11 +109,21 @@ _ob_sync() {
             # opens an editor — no completion
             ;;
         *)
+            # Global flags are only valid BEFORE the command word —
+            # main() parses them positionally and every subcommand
+            # parser rejects them. Offer them only while no command has
+            # been typed yet (e.g. right after another global flag).
             if [[ "$cur" == -* ]]; then
-                local w
-                while IFS= read -r w; do
-                    [[ -n "$w" ]] && COMPREPLY+=("$w")
-                done < <(compgen -W "$global_flags" -- "$cur")
+                local w c word cmd_seen=0
+                for ((c = 1; c < COMP_CWORD; c++)); do
+                    word="${COMP_WORDS[c]}"
+                    [[ " $commands " == *" $word "* ]] && { cmd_seen=1; break; }
+                done
+                if (( ! cmd_seen )); then
+                    while IFS= read -r w; do
+                        [[ -n "$w" ]] && COMPREPLY+=("$w")
+                    done < <(compgen -W "$global_flags" -- "$cur")
+                fi
             fi
             ;;
     esac

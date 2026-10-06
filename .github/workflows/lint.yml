@@ -6,10 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+# Successive pushes to the same branch supersede earlier runs — a hung
+# or outdated run must not occupy a hosted runner for the default 360
+# minutes.
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   shellcheck:
     name: ShellCheck (pinned v0.11.0)
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Check out the repository
         uses: actions/checkout@v5
@@ -44,6 +52,7 @@ jobs:
   test:
     name: Functional test suite
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Check out the repository
         uses: actions/checkout@v5
@@ -56,6 +65,7 @@ jobs:
   test-bash-matrix:
     name: Functional suite on bash ${{ matrix.bash }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -109,14 +119,17 @@ jobs:
   markdownlint:
     name: markdownlint-cli2
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Check out the repository
         uses: actions/checkout@v5
 
       # Reads .markdownlint.json from the repo root — the same file that
       # silences the editor warnings. One source of truth for the rules.
+      # v24 runs on node24 — v19 targeted node20, which GitHub now
+      # deprecates on hosted runners (every run printed the warning).
       - name: Lint all Markdown files
-        uses: DavidAnson/markdownlint-cli2-action@v19
+        uses: DavidAnson/markdownlint-cli2-action@v24
         with:
           globs: "**/*.md"
 

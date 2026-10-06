@@ -4,6 +4,101 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.2.2] — The line-by-line audit: mobile onboarding, honest JSON & concurrency corners
+
+### Fixed
+
+- **The interactive HTTPS flow no longer fights its own watchdog** —
+  `net()` wrapped every remote git call in the 120 s network watchdog,
+  including the moments git waits for a human to answer its credential
+  prompt. On Termux (GitHub over HTTPS wants a Personal Access Token,
+  not the account password) the watchdog killed the live prompt
+  mid-typing, which read as "the tool hangs and then exits". When stdin
+  is a terminal the watchdog now steps aside; unattended runs (cron,
+  scripts, `--json` pipelines) keep the strict timeout. A failed
+  fetch/push against an `https://` remote additionally prints
+  actionable guidance (PAT as the password, or switch to SSH via
+  `ob-sync remote`).
+- **`sync`/`pull` no longer lie about an unborn HEAD** — a vault that
+  was re-initialized before its first commit made every `rev-list`
+  against `HEAD` fail, and every failure was masked to 0: the tool
+  reported "Remote has no new commits" / "Already up to date" (and
+  `--json` `ok, pulled 0`) forever while the remote content never
+  arrived. Both commands now adopt `init`'s materialization path
+  (`reset --mixed origin/$BRANCH` + checkout of missing files) and
+  report the real pulled count.
+- **Rebase conflicts under the apply backend are handled too** — the
+  conflict path only recognized `.git/rebase-merge`; with git < 2.26
+  (or `rebase.backend=apply`) a conflict stopped in
+  `.git/rebase-apply` instead, leaving the repository mid-rebase with
+  raw conflict markers and emitting `"code": "rebase_failed",
+  "conflicts": 0` instead of the documented `conflict` document. Both
+  backends are now detected, listed and aborted cleanly.
+- **`organize` no longer orphans referenced attachments with
+  non-ASCII names** — the reference extractor only recognizes
+  ASCII-ish basenames, so an attachment containing `+ @ # , &` or
+  Persian/CJK characters was flagged as an orphan even when referenced
+  verbatim — and `--fix` then moved it, silently breaking the note
+  links. Files that survive the regex now get a byte-exact fallback
+  search across the notes before being declared orphans.
+- **A raw control byte in a filename can no longer break the JSON
+  contract** — `json_escape` handled only tab/newline/CR; any other
+  C0 control byte (legal on ext4) passed through raw and made the
+  whole `--json` document unparseable. Every byte below 0x20 (and DEL)
+  is now emitted as `\u00XX`.
+- **The temp sweeper no longer leaks multi-path registrations** —
+  `temp_register` appended only its first argument, so the two-file
+  listing cache (names + types) leaked the `tar -tvzf` metadata
+  listing on every restore preview. All arguments are registered now.
+- **The lock cannot be bulldozed mid-startup anymore** — the window
+  between `mkdir` and the pid write produced a pid-less lock dir that
+  a concurrent run declared "stale" and removed, letting two mutating
+  instances run; a late pid write then clobbered the winner. The pid
+  is published atomically (mktemp + rename) and a fresh pid-less dir
+  is reported as "starting up" instead of stale.
+- **`config_set` refuses newline values** — a vault/remote value
+  carrying a newline used to split the config file into phantom keys
+  (and truncate later reads). The write fails closed instead.
+- **`GIT_DIR` & friends are neutralized at startup** — exported
+  `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` silently redirected every
+  `git -C "$VAULT"` call at a foreign repository, so the safety checks
+  policed one repo while git mutated another. They are unset before
+  any git call.
+- **`desktop/install.sh` survives `curl | bash`** — the same
+  `BASH_SOURCE[0]`-is-unset-on-stdin abort the mobile installer had was
+  still present in the desktop installer; it now resolves the script
+  directory only when it exists.
+- **Cron blocks survive `%` and newlines** — cronie truncates a
+  command at the first unescaped `%` (quotes do not protect it), so a
+  `%` in the executable or log path silently broke the scheduled sync;
+  a newline would split the crontab into a rogue extra job. `%` is
+  escaped and newlines are refused. `config`'s cron-detection no longer
+  dies of SIGPIPE on large crontabs (false "not installed").
+- **`log --json` honors its own null contract** — a configured-but-
+  missing log file reported a path instead of `null`, and torn
+  (crash-truncated) lines reported empty strings; both now emit the
+  documented `null` metadata.
+- **`history --json` no longer misattributes authors whose name
+  contains a tab** — fields are delimited with `%x01`, which git emits
+  only as the separator, instead of a tab (legal inside a git ident).
+- **Completion stops suggesting rejected flags** — global flags are
+  only offered before the command word (every subcommand parser
+  rejects them), and `cron status` no longer offers a `--json` the
+  parser silently drops.
+- **CI hygiene** — the markdownlint action moved to node24 (`v24`,
+  silencing the deprecation warning every run printed), every job got
+  an explicit `timeout-minutes`, and both workflows declare a
+  `concurrency` group (lint supersedes outdated runs; releases never
+  cancel each other).
+
+### Tests
+
+- 27 new assertions (292 total): unborn-HEAD integration, apply-backend
+  conflict handling, unicode/`+` attachment references (scan and
+  `--fix`), control-char JSON parsing, the HTTPS PAT hint, cron `%`
+  escaping — plus the clone-pinned-config assertion that could
+  previously pass against a stale vault.
+
 ## [9.2.1] — A lost scan, preview throughput & lock-routing corners
 
 ### Fixed

@@ -13,6 +13,13 @@ on:
   push:
     tags: ["v*"]
 
+# Tag builds must never cancel each other — a release publish is
+# atomic and rare. The group only prevents duplicate runs of the same
+# ref (e.g. a force-pushed tag).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -20,6 +27,7 @@ jobs:
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out the repository
         uses: actions/checkout@v5

@@ -308,12 +308,19 @@ fi
 # gets a clean message instead of a silent mid-operation abort.
 set -uo pipefail
 
+# Environment hardening: some shells, prompt hooks and CI wrappers export
+# GIT_DIR / GIT_WORK_TREE — those silently redirect EVERY `git -C "$VAULT"`
+# call at a foreign repository, so the safety checks would police one repo
+# while git mutates another. ob-sync always addresses the vault explicitly;
+# these variables are never wanted inside a run.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_COMMON_DIR GIT_ALTERNATE_OBJECT_DIRECTORIES 2>/dev/null || :
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.2.1"
+readonly VERSION="9.2.2"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -416,6 +423,13 @@ config_get() {
 ##
 config_set() {
     local key="$1" value="$2" tmp
+    # The config format is strictly one KEY=VALUE per line — a value
+    # carrying a newline would inject phantom keys (and truncate later
+    # reads). Refuse instead of writing a corrupt file.
+    if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+        error "config: refusing to store a newline inside '$key'"
+        return 1
+    fi
     if [[ "$CONFIG_FILE" == */* ]]; then
         mkdir -p "${CONFIG_FILE%/*}" || return 1
     fi
@@ -663,12 +677,26 @@ kv() {
 # characters that realistically occur in git subject lines and paths.
 ##
 json_escape() {
-    local s="$1"
+    local s="$1" i c rep
     s=${s//\\/\\\\}
     s=${s//\"/\\\"}
     s=${s//$'\t'/\\t}
     s=${s//$'\n'/\\n}
     s=${s//$'\r'/\\r}
+    # Remaining C0 control bytes (and DEL) are illegal raw inside JSON
+    # strings — filenames on ext4 may legally contain them, and a single
+    # raw byte makes the whole --json document unparseable. Map each to
+    # \u00XX. Fast path: the scan is skipped when the string is clean
+    # (the overwhelmingly common case).
+    if [[ $s == *[$'\x01'-$'\x08'$'\x0b'$'\x0c'$'\x0e'-$'\x1f'$'\x7f']* ]]; then
+        for ((i = 1; i <= 31; i++)); do
+            case $i in 9 | 10 | 13) continue ;; esac
+            printf -v c '%b' "$(printf '\\%03o' "$i")"
+            printf -v rep '\\u%04x' "$i"
+            s=${s//"$c"/$rep}
+        done
+        s=${s//$'\x7f'/\\u007f}
+    fi
     printf '%s' "$s"
 }
 
@@ -798,7 +826,10 @@ install_hint() {
 # the pre-repair full backup is the ultimate safety net.
 ##
 temp_register() {
-    TEMP_PATHS+=("$1")
+    local p
+    for p in "$@"; do
+        TEMP_PATHS+=("$p")
+    done
     return 0
 }
 
@@ -839,6 +870,23 @@ acquire_lock() {
             return 2
         fi
 
+        # A pid-less lock dir that appeared seconds ago is a live acquirer
+        # still publishing its pid — bulldozing it would let two mutating
+        # instances run concurrently. Only an OLD pid-less dir is stale.
+        if [[ -z "$pid" ]]; then
+            local now mtime age
+            now=$(date +%s)
+            mtime=$(stat -c %Y "$LOCK_DIR" 2>/dev/null) \
+                || mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null) \
+                || mtime="$now"
+            age=$(( now - mtime ))
+            if (( age < 5 )); then
+                error "Another instance is starting up — retry in a moment"
+                LOCK_BUSY_MSG="Another instance is starting up"
+                return 2
+            fi
+        fi
+
         warn "Removing stale lock (previous PID: ${pid:-unknown})"
         rm -rf -- "$LOCK_DIR"
     fi
@@ -851,7 +899,16 @@ acquire_lock() {
         return 2
     fi
 
-    printf '%s\n' "$$" > "$LOCK_DIR/pid"
+    # Publish the pid atomically: readers either see no pid file (an
+    # acquirer that is still starting) or a complete one — never a torn
+    # write that could clobber the next acquirer's ownership.
+    local pidtmp
+    if pidtmp=$(mktemp "${LOCK_DIR}/pid.XXXXXXXX" 2>/dev/null); then
+        printf '%s\n' "$$" > "$pidtmp"
+        mv -f "$pidtmp" "$LOCK_DIR/pid"
+    else
+        printf '%s\n' "$$" > "$LOCK_DIR/pid"
+    fi
     LOCK_ACQUIRED=1
     return 0
 }
@@ -1309,9 +1366,32 @@ run_local_timeout() {
 
 ##
 # Run a network git operation inside the vault, wrapped in the watchdog.
+# Unattended runs (cron, scripts, --json pipelines) keep the strict
+# watchdog — but when a human is attached to a terminal, git may
+# legitimately block on HTTPS credential prompts (a GitHub PAT on
+# Termux takes a while to type): killing a live prompt mid-typing reads
+# as "the tool hangs and then exits". The watchdog exists for the
+# unattended case, so it yields whenever stdin is a terminal.
 ##
 net() {
-    run_with_timeout git -c "safe.directory=$VAULT" -C "$VAULT" "$@"
+    if [[ -t 0 ]]; then
+        g "$@"
+    else
+        run_with_timeout git -c "safe.directory=$VAULT" -C "$VAULT" "$@"
+    fi
+}
+
+##
+# Actionable guidance after a failed remote operation against an HTTPS
+# remote: GitHub (like most forges) rejects account passwords — a
+# Personal Access Token is required, or the remote switches to SSH.
+##
+cred_hint() {
+    local url
+    url=$(g remote get-url origin 2>/dev/null) || return 0
+    [[ "$url" == https://* ]] || return 0
+    warn "HTTPS remote: GitHub needs a Personal Access Token as the password, not your account password"
+    warn "On mobile, SSH is easier:  ob-sync remote git@github.com:<user>/<repo>.git"
 }
 
 ##
@@ -1572,7 +1652,7 @@ rebase_onto_remote() {
         return 0
     fi
 
-    if [[ -d "$VAULT/.git/rebase-merge" ]]; then
+    if [[ -d "$VAULT/.git/rebase-merge" || -d "$VAULT/.git/rebase-apply" ]]; then
         REBASE_CONFLICT=1
         error "Merge conflict detected — aborting rebase"
         local -a conflicted=()
@@ -1923,28 +2003,50 @@ sync_run() {
     step "Fetching remote state"
     if ! net fetch --quiet origin 2>/dev/null; then
         error "Fetch failed — check network connection and credentials"
+        cred_hint
         sync_fail fetch_failed "git fetch failed (network or credentials)"
         return 1
     fi
 
     if remote_branch_exists; then
-        if counts=$(g rev-list --left-right --count "origin/$BRANCH...HEAD" 2>/dev/null); then
-            read -r behind ahead <<< "$counts"
-        fi
-        if (( behind > 0 )); then
-            step "Rebasing onto origin/$BRANCH ($behind remote commit(s))"
-            rebase_onto_remote || {
-                if (( REBASE_CONFLICT )); then
-                    sync_fail conflict "Merge conflict — local commits are preserved"
-                else
-                    sync_fail rebase_failed "Rebase onto origin/$BRANCH failed"
+        if ! g rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+            # Unborn HEAD with a populated remote (a vault re-initialized
+            # before its first commit): rev-list against HEAD cannot
+            # work, and masking it to 0 reported "up to date" forever
+            # while the remote content never arrived. Adopt init's
+            # materialization path instead.
+            behind=$(g rev-list --count "origin/$BRANCH" 2>/dev/null) || behind=0
+            [[ "$behind" =~ ^[0-9]+$ ]] || behind=0
+            if (( behind > 0 )); then
+                step "Aligning with origin/$BRANCH ($behind remote commit(s) — no local commits yet)"
+                if ! g reset --mixed "origin/$BRANCH" >/dev/null 2>&1; then
+                    sync_fail rebase_failed "Could not align with origin/$BRANCH"
+                    return 1
                 fi
-                return 1
-            }
-            SYNC_PULLED=$behind
-            success "Integrated $behind remote commit(s)"
-        else
-            info "Remote has no new commits"
+                g ls-files --deleted -z 2>/dev/null \
+                    | xargs -0 git -C "$VAULT" checkout -- 2>/dev/null || :
+                SYNC_PULLED=$behind
+                success "Integrated $behind remote commit(s)"
+            else
+                info "Remote has no new commits"
+            fi
+        elif counts=$(g rev-list --left-right --count "origin/$BRANCH...HEAD" 2>/dev/null); then
+            read -r behind ahead <<< "$counts"
+            if (( behind > 0 )); then
+                step "Rebasing onto origin/$BRANCH ($behind remote commit(s))"
+                rebase_onto_remote || {
+                    if (( REBASE_CONFLICT )); then
+                        sync_fail conflict "Merge conflict — local commits are preserved"
+                    else
+                        sync_fail rebase_failed "Rebase onto origin/$BRANCH failed"
+                    fi
+                    return 1
+                }
+                SYNC_PULLED=$behind
+                success "Integrated $behind remote commit(s)"
+            else
+                info "Remote has no new commits"
+            fi
         fi
     else
         info "Remote branch '$BRANCH' not found — the next push will create it"
@@ -1969,6 +2071,7 @@ sync_run() {
         else
             error "Push failed — local commits are preserved"
             warn "Check network/credentials, then retry with: ob-sync push"
+            cred_hint
             sync_fail push_failed "git push failed (network or credentials)"
             return 1
         fi
@@ -2037,11 +2140,33 @@ pull_run() {
     commit_changes "chore(pull)" || { sync_fail commit_failed "Could not commit local changes"; return 1; }
 
     step "Fetching remote state"
-    net fetch --quiet origin 2>/dev/null || { error "Fetch failed"; sync_fail fetch_failed "git fetch failed (network or credentials)"; return 1; }
+    net fetch --quiet origin 2>/dev/null || { error "Fetch failed"; cred_hint; sync_fail fetch_failed "git fetch failed (network or credentials)"; return 1; }
 
     if ! remote_branch_exists; then
         info "Remote branch '$BRANCH' not found — nothing to pull"
         return 0
+    fi
+
+    if ! g rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+        # Unborn HEAD with a populated remote: adopt init's
+        # materialization path instead of reporting "Already up to date"
+        # forever while the remote files never arrive.
+        behind=$(g rev-list --count "origin/$BRANCH" 2>/dev/null) || behind=0
+        [[ "$behind" =~ ^[0-9]+$ ]] || behind=0
+        if (( behind == 0 )); then
+            success "Already up to date"
+            return 0
+        fi
+        step "Aligning with origin/$BRANCH ($behind remote commit(s) — no local commits yet)"
+        if g reset --mixed "origin/$BRANCH" >/dev/null 2>&1; then
+            g ls-files --deleted -z 2>/dev/null \
+                | xargs -0 git -C "$VAULT" checkout -- 2>/dev/null || :
+            SYNC_PULLED=$behind
+            success "Integrated $behind remote commit(s)"
+            return 0
+        fi
+        sync_fail rebase_failed "Could not align with origin/$BRANCH"
+        return 1
     fi
 
     behind=$(g rev-list --count "HEAD..origin/$BRANCH" 2>/dev/null) || behind=0
@@ -2128,6 +2253,7 @@ push_run() {
     fi
 
     error "Push failed — check network connection and credentials"
+    cred_hint
     sync_fail push_failed "git push failed (network or credentials)"
     return 1
 }
@@ -3006,7 +3132,14 @@ cmd_restore() {
     # keeps its rc contract and check_archive_safe reuses both listings
     # below (the pre-9.2.1 apply flow decompressed the stream three
     # times before extraction).
-    if ! tar_listing_cache "$archive"; then
+    local lrc=0
+    tar_listing_cache "$archive" || lrc=$?
+    if (( lrc == 124 )); then
+        # The watchdog killed the listing pass — the archive is not
+        # proven corrupt, it is just slow/huge. Report the real cause.
+        restore_fail "extraction_timeout" "Listing timed out after ${LOCAL_TIMEOUT}s (OBS_LOCAL_TIMEOUT)"
+        return 1
+    elif (( lrc != 0 )); then
         restore_fail "archive_corrupt" "Archive is unreadable or corrupt"
         return 1
     fi
@@ -3880,7 +4013,20 @@ organize_scan() {
     local base
     for f in "${attach_files[@]}"; do
         base=${f##*/}
-        [[ -n "${referenced[${base,,}]:-}" ]] || ORG_ORPHANS+=("$f")
+        if [[ -n "${referenced[${base,,}]:-}" ]]; then
+            continue
+        fi
+        # The extractor above only recognizes ASCII-ish names — a
+        # basename containing non-ASCII (Persian, CJK) or characters
+        # outside its class can never match it, yet a note may reference
+        # the file verbatim. Before declaring an orphan, search the raw
+        # bytes: a fixed-string scan over the notes (grep -i's case
+        # folding is ASCII-only anyway, so an exact match is the honest
+        # check here). Bounded: only runs for files about to be flagged.
+        if grep -rqF --include='*.md' --exclude-dir=.git -- "$base" "$VAULT" 2>/dev/null; then
+            continue
+        fi
+        ORG_ORPHANS+=("$f")
     done
     return 0
 }
@@ -4737,7 +4883,7 @@ log_emit_json() {
     if (( rc != 0 )); then
         j_error="{ \"code\": \"log_unreadable\", \"message\": \"Cannot read log file\" }"
     fi
-    [[ -n "${LOG_FILE:-}" ]] && j_file="\"$(json_escape "$LOG_FILE")\""
+    [[ -n "${LOG_FILE:-}" && -f "$LOG_FILE" ]] && j_file="\"$(json_escape "$LOG_FILE")\""
 
     printf '{\n'
     printf '  "version": "%s",\n' "$VERSION"
@@ -4752,8 +4898,15 @@ log_emit_json() {
         ts=${row%%$'\x1f'*}; row=${row#*$'\x1f'}
         src=${row%%$'\x1f'*}; msg=${row#*$'\x1f'}
         if (( i == ${#LOG_ROWS[@]} - 1 )); then sep=""; else sep=","; fi
-        printf '    { "timestamp": "%s", "source": "%s", "message": "%s" }%s\n' \
-            "$(json_escape "$ts")" "$(json_escape "$src")" "$(json_escape "$msg")" "$sep"
+        if [[ -z "$ts" && -z "$src" ]]; then
+            # A torn/partial line — the stored row has empty metadata by
+            # construction, and the contract promises null, not "".
+            printf '    { "timestamp": null, "source": null, "message": "%s" }%s\n' \
+                "$(json_escape "$msg")" "$sep"
+        else
+            printf '    { "timestamp": "%s", "source": "%s", "message": "%s" }%s\n' \
+                "$(json_escape "$ts")" "$(json_escape "$src")" "$(json_escape "$msg")" "$sep"
+        fi
     done
     printf '  ],\n'
     printf '  "error": %s\n' "$j_error"
@@ -5067,13 +5220,29 @@ cron_install() {
     table=$(cron_current_table) || table=""
     stripped=$(cron_strip_block <<< "$table")
 
+    # cronie truncates a command at the first unescaped `%` (quotes do
+    # NOT protect it) and feeds the remainder to the command as stdin —
+    # a `%` in a path would silently break the scheduled sync. A newline
+    # would split the crontab into a rogue extra job: refuse that.
+    local job_self="$self" job_log="$CRON_LOG"
+    if [[ "$job_self" == *$'\n'* || "$job_log" == *$'\n'* ]]; then
+        error "Cannot schedule: executable or log path contains a newline"
+        return 1
+    fi
+    job_self=${job_self//%/\\%}
+    job_log=${job_log//%/\\%}
+
     tmp=$(mktemp) || { error "Cannot create a temporary file"; return 1; }
     temp_register "$tmp"
     {
         [[ -n "$stripped" ]] && printf '%s\n' "$stripped"
         printf '%s\n' "$CRON_BEGIN"
+        # NOTE: cron applies env assignments positionally — this PATH=
+        # line also governs user jobs appended BELOW the managed block.
+        # Documented caveat; moving it into the job line would change the
+        # block format existing installs and the test-suite assert.
         printf 'PATH=%s\n' "$PATH"
-        printf '%s "%s" sync >> "%s" 2>&1\n' "$expr" "$self" "$CRON_LOG"
+        printf '%s "%s" sync >> "%s" 2>&1\n' "$expr" "$job_self" "$job_log"
         printf '%s\n' "$CRON_END"
     } > "$tmp"
 
@@ -5380,17 +5549,20 @@ history_run() {
     if (( SILENT_UI )); then
         # Machine mode: full hash (unambiguous) + ISO 8601 strict date
         # (stable and sortable) + author — a contract, not a display.
-        # `git log --pretty=format:` emits NO trailing newline, so the
-        # final read returns non-zero with the variables still populated
-        # — the plain `while read` form silently DROPPED the newest
-        # commit (pre-9.2.0 bug). `|| [[ -n $hash ]]` keeps that line.
-        while IFS=$'\t' read -r hash when author subject || [[ -n "$hash" ]]; do
+        # Fields are delimited with 0x01, which git emits only as our
+        # separator — a tab inside an author name (legal in a git ident)
+        # would otherwise shift attribution. `git log --pretty=format:`
+        # emits NO trailing newline, so the final read returns non-zero
+        # with the variables still populated — the plain `while read`
+        # form silently DROPPED the newest commit (pre-9.2.0 bug).
+        # `|| [[ -n $hash ]]` keeps that line.
+        while IFS=$'\x01' read -r hash when author subject || [[ -n "$hash" ]]; do
             [[ -n "$hash" ]] || continue
             HISTORY_COUNT=$((HISTORY_COUNT + 1))
             # 0x1f (unit separator) — subject lines are free text and can
             # contain anything except control characters.
             HISTORY_ROWS+=("$(printf '%s\x1f%s\x1f%s\x1f%s' "$hash" "$when" "$author" "$subject")")
-        done < <(g log --pretty=format:'%H%x09%cI%x09%an%x09%s' -n "$n" 2>/dev/null)
+        done < <(g log --pretty=format:'%H%x01%cI%x01%an%x01%s' -n "$n" 2>/dev/null)
     else
         # Human mode — byte-identical to the pre-9.2.0 output (short
         # hash, relative date), minus the dropped-newest-commit bug.
@@ -5499,8 +5671,14 @@ cmd_config() {
     kv "Pre-sync backup" "$( [[ "$SKIP_BACKUP" == "1" ]] && printf 'disabled (OBS_SKIP_BACKUP=1)' || printf 'enabled' )"
     kv "Attach dir" "$ATTACH_DIR"
     kv "Log file" "${LOG_FILE:-disabled}"
-    if command -v crontab >/dev/null 2>&1 \
-        && crontab -l 2>/dev/null | grep -qF "$CRON_BEGIN"; then
+    # Read the whole table first: `crontab -l | grep -q` dies of SIGPIPE
+    # on large crontabs (grep exits early, the producer gets rc 141) and
+    # the check would falsely report "not installed".
+    local cron_table=""
+    if command -v crontab >/dev/null 2>&1; then
+        cron_table=$(crontab -l 2>/dev/null) || cron_table=""
+    fi
+    if [[ "$cron_table" == *"$CRON_BEGIN"* ]]; then
         kv "Scheduled sync" "installed (details: ob-sync cron status)"
     else
         kv "Scheduled sync" "not installed"

@@ -126,7 +126,7 @@ echo "== 5. second device: clone via init =="
 export OBS_VAULT="$SB/vault2"
 t "init -y (clone)"      0 "$OB" init -y
 assert   "vault2 cloned"          test -f "$SB/vault2/note1.md"
-assertout "clone pinned config"   "^VAULT=" cat "$SB/config"
+assertout "clone pinned config"   "^VAULT=$SB/vault2$" cat "$SB/config"
 
 echo "== 6. edit on device2, sync; then device1 pulls =="
 printf 'device2 edit\n' >> "$SB/vault2/note1.md"
@@ -1448,6 +1448,112 @@ print(json.load(sys.stdin)["backups"][0]["path"])')
 else
     echo "  [SKIP] organize --json checks (python3 not installed)"
 fi
+
+echo
+echo "== 36. v9.2.2 regressions (line-by-line audit) =="
+
+# 36a — unborn HEAD + populated remote: sync must integrate the remote
+# content instead of reporting "up to date" forever (rev-list against an
+# unborn HEAD used to fail and be masked to 0).
+export OBS_VAULT="$SB/vaultUnborn"
+mkdir -p "$SB/vaultUnborn"
+git -C "$SB/vaultUnborn" init -q
+git -C "$SB/vaultUnborn" remote add origin "$SB/remote.git"
+t "unborn HEAD: sync -y succeeds" 0 "$OB" sync -y
+assert "unborn HEAD: remote note materialized" test -f "$SB/vaultUnborn/note1.md"
+t "unborn HEAD: health is green afterwards" 0 "$OB" health
+
+# 36b — conflicts under rebase.backend=apply (the default backend of
+# git < 2.26) must be detected, listed and aborted exactly like the
+# merge backend: the repo used to be left mid-rebase with the wrong
+# JSON code and raw conflict markers on disk.
+git init -q --bare "$SB/remote2.git"
+export OBS_VAULT="$SB/vaultC1"
+mkdir -p "$SB/vaultC1"
+printf 'base line\n' > "$SB/vaultC1/note.md"
+t "apply-backend setup: first device inits" 0 env OBS_REMOTE="$SB/remote2.git" "$OB" init -y
+t "apply-backend setup: first device syncs" 0 "$OB" sync -y
+export OBS_VAULT="$SB/vaultC2"
+mkdir -p "$SB/vaultC2"
+t "apply-backend setup: device2 clones" 0 env OBS_REMOTE="$SB/remote2.git" "$OB" init -y
+printf 'device2 version\n' > "$SB/vaultC2/note.md"
+t "apply-backend setup: device2 lands its version" 0 "$OB" sync -y
+export OBS_VAULT="$SB/vaultC1"
+printf 'device1 version\n' > "$SB/vaultC1/note.md"
+git -C "$SB/vaultC1" config rebase.backend apply
+t "apply-backend conflict -> rc=1" 1 "$OB" sync -y
+assertout "apply-backend conflict -> code=conflict" '"code": "conflict"' \
+    bash -c "${OB@Q} sync --json 2>&1 || :"
+assert "apply-backend: no rebase-apply dir left behind" \
+    test ! -d "$SB/vaultC1/.git/rebase-apply"
+assert "apply-backend: no rebase-merge dir left behind" \
+    test ! -d "$SB/vaultC1/.git/rebase-merge"
+assert "apply-backend: branch still symbolic (not detached)" \
+    git -C "$SB/vaultC1" symbolic-ref -q HEAD
+assert "apply-backend: no conflict markers in worktree" \
+    bash -c "! grep -q '<<<<<<<' '$SB/vaultC1/note.md'"
+git -C "$SB/vaultC1" reset --hard -q HEAD~1
+t "apply-backend: recovery sync works" 0 "$OB" sync -y
+
+# 36c — organize's reference extractor only recognizes ASCII-ish names;
+# an attachment referenced verbatim but containing '+' or Persian/CJK
+# characters used to be a permanent false orphan (and --fix moved it,
+# breaking the note links). The byte-exact fallback must protect them.
+export OBS_VAULT="$SB/vaultOrg"
+mkdir -p "$SB/vaultOrg"
+printf '![x](foo+bar.png)\n\n![y](عکس.png)\n' > "$SB/vaultOrg/note.md"
+printf 'PNG' > "$SB/vaultOrg/foo+bar.png"
+printf 'PNG' > "$SB/vaultOrg/عکس.png"
+printf 'PNG' > "$SB/vaultOrg/unreferenced.png"
+t "organize: scan runs on unicode vault" 0 "$OB" organize --json
+assert "organize: '+'-referenced attachment not flagged" \
+    bash -c "! grep -q 'foo+bar' '$SB/out.txt'"
+assert "organize: Persian-referenced attachment not flagged" \
+    bash -c "! grep -q 'عکس' '$SB/out.txt'"
+assert "organize: true orphan still flagged" \
+    grep -q 'unreferenced' "$SB/out.txt"
+t "organize --fix runs" 0 "$OB" organize --fix --json
+assert "fix: referenced '+' file stays put" test -f "$SB/vaultOrg/foo+bar.png"
+assert "fix: referenced Persian file stays put" test -f "$SB/vaultOrg/عکس.png"
+assert "fix: true orphan moved into attachments" \
+    test -f "$SB/vaultOrg/Attachments/unreferenced.png"
+
+# 36d — a filename containing a raw C0 control byte used to produce a
+# JSON document no parser could read (json_escape now maps it to \\u00XX).
+export OBS_VAULT="$SB/vaultCtrl"
+mkdir -p "$SB/vaultCtrl"
+printf 'tiny\n' > "$SB/vaultCtrl/note"$'\x01'"bad.md"
+t "organize --json with a control-char filename runs" 0 "$OB" organize --json
+if command -v python3 >/dev/null 2>&1; then
+    if "$OB" organize --json 2>/dev/null | python3 -m json.tool >/dev/null 2>&1; then
+        PASS=$((PASS + 1)); echo "  [ OK ] control-char filename: JSON still parses"
+    else
+        FAIL=$((FAIL + 1)); echo "  [FAIL] control-char filename broke the JSON document"
+    fi
+else
+    echo "  [SKIP] control-char JSON check (python3 not installed)"
+fi
+
+# 36e — a failed push against an HTTPS remote must explain GitHub's PAT
+# requirement instead of a bare "check credentials" (the exact trap that
+# hung up the first Termux run: git prompts for a token, not a password).
+export OBS_VAULT="$SB/vaultHttps"
+mkdir -p "$SB/vaultHttps"
+git -C "$SB/vaultHttps" init -q
+printf 'x\n' > "$SB/vaultHttps/note.md"
+git -C "$SB/vaultHttps" add -A
+git -C "$SB/vaultHttps" -c user.name=suite -c user.email=suite@local commit -qm base
+git -C "$SB/vaultHttps" remote add origin "https://127.0.0.1:1/repo.git"
+assertout "https failure shows the PAT/SSH hint" "Personal Access Token" \
+    bash -c "${OB@Q} push -y 2>&1 || :"
+
+# 36f — cronie truncates a command at the first unescaped '%'; a '%' in
+# the log path used to silently break the scheduled sync.
+export OBS_VAULT="$SB/vaultC1"
+t "cron install with % in log path" 0 \
+    env OBS_CRON_LOG="$SB/logs/pct-%H.log" "${CENV[@]}" "$OB" cron install hourly
+assert "cron: % in log path escaped for cronie" grep -F '\%' "$FAKE_CRONTAB"
+"${CENV[@]}" "$OB" cron uninstall -y >/dev/null 2>&1
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

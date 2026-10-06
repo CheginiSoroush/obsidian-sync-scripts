@@ -21,8 +21,15 @@ DEST="$HOME/.local/bin"
 mkdir -p "$DEST"
 
 # Prefer a local checkout, fall back to a remote download.
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-if [[ -f "$SCRIPT_DIR/../bin/ob-sync" ]]; then
+# NOTE: under `curl … | bash` the script runs from stdin, where
+# BASH_SOURCE[0] is unset — referencing it under `set -u` aborts the
+# whole installer (the exact bug fixed in the mobile installer), so
+# only resolve it when it exists.
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+fi
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/../bin/ob-sync" ]]; then
     say "Installing from local checkout"
     cp -- "$SCRIPT_DIR/../bin/ob-sync" "$DEST/ob-sync"
 else
