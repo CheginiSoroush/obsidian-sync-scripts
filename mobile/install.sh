@@ -15,6 +15,7 @@ REPO_RAW="https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts
 ok()   { printf '\033[92m[ OK ]\033[0m %s\n' "$1"; }
 say()  { printf '\033[96m[INFO]\033[0m %s\n' "$1"; }
 fail() { printf '\033[91m[FAIL]\033[0m %s\n' "$1" >&2; exit 1; }
+warn() { printf '\033[93m[WARN]\033[0m %s\n' "$1" >&2; }
 
 # This installer is Termux-only — desktop users have their own.
 [[ -n "${TERMUX_VERSION:-}" && -n "${PREFIX:-}" ]] || {
@@ -25,8 +26,14 @@ DEST="$PREFIX/bin"
 mkdir -p "$DEST"
 
 # Prefer a local checkout, fall back to a remote download.
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-if [[ -f "$SCRIPT_DIR/../bin/ob-sync" ]]; then
+# NOTE: under `curl … | bash` the script runs from stdin, where
+# BASH_SOURCE[0] is unset — referencing it under `set -u` aborts the
+# whole installer on Termux, so only resolve it when it exists.
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+fi
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/../bin/ob-sync" ]]; then
     say "Installing from local checkout"
     cp -- "$SCRIPT_DIR/../bin/ob-sync" "$DEST/ob-sync"
 else
