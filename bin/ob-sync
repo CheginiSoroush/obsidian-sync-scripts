@@ -6,7 +6,7 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#   Version   : 9.0.0
+#   Version   : 9.2.3
 #   Author    : Soroush Chegini
 #   License   : MIT
 #   Repository: https://github.com/CheginiSoroush/obsidian-sync-scripts
@@ -34,6 +34,56 @@
 #       · One core          — platform differences live behind portability
 #                             helpers, never in forks of this script
 #       · Graceful failure  — errors report and return; nothing exits silently
+#
+#   RELEASE NOTES — 9.2.3 (closure audit: honest failures, no dead waits)
+#       · restore rejects extra positional arguments (fail-closed, same
+#         contract as backup/verify) — a typo can no longer silently
+#         ride along a destructive restore; the interactive pick parses
+#         its number in base 10 ("010" no longer selected #8).
+#       · listing timeouts are labeled truthfully again: tar_listing_cache
+#         collapsed the watchdog's rc 124 into "corrupt", which made
+#         9.2.2's extraction_timeout mapping dead code. The human
+#         preview, the JSON preview and the apply gate all report
+#         extraction_timeout now.
+#       · doctor: ONE ls-remote (--symref) answers reachability, empty-
+#         repository detection and the default branch — an unreachable
+#         remote no longer burns the network watchdog three times
+#         (about 3 × OBS_GIT_TIMEOUT of dead waiting).
+#       · history: a corrupted object store now fails loudly
+#         (history_unreadable, rc 1) in human and JSON mode instead of
+#         silently reporting an empty history.
+#       · log / log --json no longer create or rotate the activity log
+#         before reading it: a fresh machine gets the documented
+#         log_file:null / count:0 document (not ob-sync's own "invoked"
+#         row), and a >1MiB log answers with its real last-n entries
+#         instead of one junk row.
+#       · cron install refuses a schedule containing newline, % or
+#         backslash (cronie truncates a line at the first unescaped %;
+#         a newline would install a rogue second job) and refuses
+#         backslashes in the executable/log paths (a backslash before
+#         the escaped % would defeat the escaping).
+#       · completions: a multi-line command list broke the space-
+#         delimited match for "organize" and "menu" — global flags are
+#         no longer offered after them (the parser rejects them there).
+#
+#   RELEASE NOTES — 9.2.2 (line-by-line audit: 15 fixes, 292 tests)
+#       · The 120s network watchdog yields while a human is attached to
+#         a terminal — git HTTPS credential prompts (a GitHub PAT on
+#         Termux) can no longer be killed mid-typing; unattended runs
+#         keep the strict watchdog. Failed https fetch/push prints
+#         actionable PAT/SSH guidance (cred_hint).
+#       · Foreign GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE environment is
+#         neutralized at startup; json_escape maps every C0 control
+#         byte; temp_register keeps all its arguments; config_set
+#         refuses newline values; the PID lock is published atomically
+#         (mktemp+mv) with a startup-race guard.
+#       · sync/pull adopt an unborn HEAD from a populated remote instead
+#         of reporting "up to date" forever; rebase-apply backend
+#         conflicts are detected and cleaned; organize's orphan scan
+#         falls back to byte-exact matching for non-ASCII names (no
+#         more false orphans for Persian filenames); cron install
+#         escapes % for cronie and refuses newline paths; log --json
+#         null contracts; history --json author attribution.
 #
 #   RELEASE NOTES — 9.2.1 (preview throughput & a lost scan restored)
 #       · organize regression fix: the 9.2.0 refactor that extracted
@@ -320,7 +370,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.2.2"
+readonly VERSION="9.2.3"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -1242,12 +1292,26 @@ tar_listing_cache() {
     types=$(mktemp) || { rm -f -- "$names"; return 1; }
     temp_register "$names" "$types"
 
-    if ! run_local_timeout tar -tzf "$archive" > "$names" 2>/dev/null; then
+    # Propagate the watchdog's 124 so callers can tell "slow/huge"
+    # apart from "corrupt" (pre-9.2.3 both collapsed to 1, which made
+    # the extraction_timeout contracts in the restore paths dead code).
+    local rc=0
+    run_local_timeout tar -tzf "$archive" > "$names" 2>/dev/null || rc=$?
+    if (( rc == 124 )); then
+        rm -f -- "$names" "$types"
+        TAR_CACHE_FOR="" TAR_CACHE_NAMES="" TAR_CACHE_TYPES=""
+        return 124
+    elif (( rc != 0 )); then
         rm -f -- "$names" "$types"
         TAR_CACHE_FOR="" TAR_CACHE_NAMES="" TAR_CACHE_TYPES=""
         return 1
     fi
-    if ! run_local_timeout tar -tvzf "$archive" > "$types" 2>/dev/null; then
+    run_local_timeout tar -tvzf "$archive" > "$types" 2>/dev/null || rc=$?
+    if (( rc == 124 )); then
+        rm -f -- "$names" "$types"
+        TAR_CACHE_FOR="" TAR_CACHE_NAMES="" TAR_CACHE_TYPES=""
+        return 124
+    elif (( rc != 0 )); then
         rm -f -- "$names" "$types"
         TAR_CACHE_FOR="" TAR_CACHE_NAMES="" TAR_CACHE_TYPES=""
         return 1
@@ -2648,6 +2712,14 @@ restore_parse_args() {
             *)          pos+=("$1"); shift ;;
         esac
     done
+    if (( ${#pos[@]} > 1 )); then
+        # Fail-closed like backup/verify: a stray extra argument used to
+        # be silently ignored while the FIRST positional still drove a
+        # destructive restore.
+        error "Unexpected extra argument: ${pos[1]}"
+        warn "Usage: ob-sync restore [options] [target]"
+        return 1
+    fi
     RESTORE_TARGET="${pos[0]:-}"
     if (( RESTORE_JSON )) && [[ "$RESTORE_MODE" == "dry-run" ]]; then
         # A machine-readable rehearsal already exists: the --list preview
@@ -2684,9 +2756,14 @@ restore_pick_backup() {
     local choice=""
     read -r -p "  Select backup [1]: " choice || :
     choice=${choice:-1}
-    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#archives[@]} )); then
-        RESTORE_PICK_RESULT=${archives[choice - 1]}
-        return 0
+    if [[ "$choice" =~ ^[0-9]+$ ]]; then
+        # Base-10 force: a zero-padded pick ("010") would otherwise be
+        # parsed as octal in the arithmetic context and select #8.
+        local pick=$((10#$choice))
+        if (( pick >= 1 && pick <= ${#archives[@]} )); then
+            RESTORE_PICK_RESULT=${archives[pick - 1]}
+            return 0
+        fi
     fi
     error "Invalid selection: $choice"
     return 1
@@ -2704,7 +2781,12 @@ restore_preview() {
     # One decompression of each listing (see tar_listing_cache) serves
     # the integrity gate, the member audit and the statistics below —
     # the pre-9.2.1 preview re-read the same stream six times.
-    if ! tar_listing_cache "$archive"; then
+    local prc=0
+    tar_listing_cache "$archive" || prc=$?
+    if (( prc == 124 )); then
+        error "Listing timed out after ${LOCAL_TIMEOUT}s (OBS_LOCAL_TIMEOUT) — archive too large or disk too slow"
+        return 1
+    elif (( prc != 0 )); then
         error "Archive is unreadable or corrupt"
         return 1
     fi
@@ -2830,7 +2912,11 @@ restore_json_preview() {
     # tar_listing_cache decompresses each listing ONCE (the pre-9.2.1
     # preview re-read the stream six times) and doubles as the
     # integrity gate for the error document below.
-    if ! tar_listing_cache "$archive"; then
+    local prc=0
+    tar_listing_cache "$archive" || prc=$?
+    if (( prc == 124 )); then
+        j_err="listing timed out after ${LOCAL_TIMEOUT}s (OBS_LOCAL_TIMEOUT)"
+    elif (( prc != 0 )); then
         j_err="archive is unreadable or corrupt"
     elif ! verify_sidecar "$archive"; then
         j_err="checksum mismatch — archive may be corrupted"
@@ -4331,15 +4417,22 @@ doctor_run() {
     fi
 
     step "Checking remote connectivity"
-    local url remote_out
+    local url remote_out="" default_branch=""
     url=$(remote_url)
     if [[ -z "$url" ]]; then
         warn "No remote repository configured yet"
         warn "Set one with: ob-sync remote <url>   (e.g. https://github.com/<user>/<vault>.git)"
-    elif remote_out=$(run_with_timeout git ls-remote "$url" 2>/dev/null) && [[ -n "$remote_out" ]]; then
-        success "Remote is reachable"
-    elif [[ -n "$url" ]] && run_with_timeout git ls-remote "$url" >/dev/null 2>&1; then
-        success "Remote is reachable (empty repository — the first sync creates the branch)"
+    elif remote_out=$(run_with_timeout git ls-remote --symref "$url" 2>/dev/null); then
+        # ONE network call answers reachability, empty-repository
+        # detection AND the default branch (pre-9.2.3 an unreachable
+        # remote burned the watchdog up to three times — about
+        # 3 × OBS_GIT_TIMEOUT of dead waiting on a dead network).
+        default_branch=$(awk '/^ref:/ { sub(/refs\/heads\//, "", $2); print $2; exit }' <<< "$remote_out")
+        if [[ -n "$remote_out" ]]; then
+            success "Remote is reachable"
+        else
+            success "Remote is reachable (empty repository — the first sync creates the branch)"
+        fi
     else
         warn "Remote is unreachable — network down, private repo, or missing credentials"
         warn "For private repos, authenticate once:"
@@ -4347,11 +4440,8 @@ doctor_run() {
         printf '      git ls-remote %s   (enter token — it will be saved)\n' "$url"
     fi
 
-    if [[ -n "$url" ]]; then
+    if [[ -n "$url" && -n "$remote_out" ]]; then
         step "Checking remote default branch"
-        local default_branch
-        default_branch=$(run_with_timeout git ls-remote --symref "$url" HEAD 2>/dev/null \
-            | awk '/^ref:/ { sub(/refs\/heads\//, "", $2); print $2; exit }')
         if [[ -n "$default_branch" ]]; then
             if [[ "$default_branch" == "$BRANCH" ]]; then
                 success "Remote default branch '$BRANCH' matches configuration"
@@ -4494,28 +4584,30 @@ cmd_doctor_json() {
 
     # Remote reachability (network I/O under the watchdog, as the human
     # report does)
-    local url remote_out
+    local url remote_out="" default_branch=""
     url=$(remote_url)
     local j_remote="null" j_branch="null"
     if [[ -z "$url" ]]; then
         doctor_row warn remote "No remote repository configured yet (set one with: ob-sync remote <url>)"
         doctor_row info remote_branch "Not checked — no remote configured"
-    elif remote_out=$(run_with_timeout git ls-remote "$url" 2>/dev/null) && [[ -n "$remote_out" ]]; then
-        doctor_row ok remote "Remote is reachable"
-        j_remote="\"$(json_escape "$url")\""
-    elif run_with_timeout git ls-remote "$url" >/dev/null 2>&1; then
-        doctor_row ok remote "Remote is reachable (empty repository — the first sync creates the branch)"
+    elif remote_out=$(run_with_timeout git ls-remote --symref "$url" 2>/dev/null); then
+        # ONE network call answers reachability, empty-repository
+        # detection AND the default branch (see the human twin above).
+        default_branch=$(awk '/^ref:/ { sub(/refs\/heads\//, "", $2); print $2; exit }' <<< "$remote_out")
+        if [[ -n "$remote_out" ]]; then
+            doctor_row ok remote "Remote is reachable"
+        else
+            doctor_row ok remote "Remote is reachable (empty repository — the first sync creates the branch)"
+        fi
         j_remote="\"$(json_escape "$url")\""
     else
         doctor_row warn remote "Remote is unreachable — network down, private repo, or missing credentials"
         j_remote="\"$(json_escape "$url")\""
     fi
 
-    # Remote default branch (only meaningful when the remote answered)
-    if [[ -n "$url" ]] && [[ "$j_remote" != "null" ]]; then
-        local default_branch
-        default_branch=$(run_with_timeout git ls-remote --symref "$url" HEAD 2>/dev/null \
-            | awk '/^ref:/ { sub(/refs\/heads\//, "", $2); print $2; exit }')
+    # Remote default branch — keyed on the remote actually ANSWERING
+    # (j_remote also carries the URL on the unreachable path).
+    if [[ -n "$url" && -n "$remote_out" ]]; then
         if [[ -n "$default_branch" ]]; then
             j_branch="\"$(json_escape "$default_branch")\""
             if [[ "$default_branch" == "$BRANCH" ]]; then
@@ -4792,6 +4884,13 @@ cmd_log() {
 
     local lines="${pos[0]:-20}"
     [[ "$lines" =~ ^[0-9]+$ ]] || lines=20
+
+    # A reader must not materialize its own subject: if the activity log
+    # does not exist yet, drop LOG_FILE so the UI helpers below cannot
+    # create it as a side effect (info() demotes to the log file under
+    # SILENT_UI, and `>>` creates the file — a fresh machine would
+    # otherwise answer with an INFO row inside a brand-new file).
+    [[ -n "$LOG_FILE" && ! -f "$LOG_FILE" ]] && LOG_FILE=""
 
     if (( ! json )); then
         log_run "$lines"
@@ -5209,6 +5308,16 @@ cron_install() {
         expr="$preset"
     fi
 
+    # cronie truncates a line at the first UNESCAPED % and a newline
+    # would install a rogue second job — none of these can appear in a
+    # legitimate 5-field schedule, so refuse them outright.
+    case "$expr" in
+        *$'\n'*|*%*|*\\*)
+            error "Invalid cron expression: newline, % or backslash are not allowed"
+            warn "A % would truncate the job line; a newline would install a second job"
+            return 1 ;;
+    esac
+
     local self
     self=$(cron_self_path) || {
         error "Cannot locate the ob-sync executable for the crontab line"
@@ -5227,6 +5336,14 @@ cron_install() {
     local job_self="$self" job_log="$CRON_LOG"
     if [[ "$job_self" == *$'\n'* || "$job_log" == *$'\n'* ]]; then
         error "Cannot schedule: executable or log path contains a newline"
+        return 1
+    fi
+    if [[ "$job_self" == *\\* || "$job_log" == *\\* ]]; then
+        # A backslash directly before the escaped % (e.g. a log path
+        # ending in "\%Y") would produce \\% — cronie then truncates at
+        # the % anyway and the job breaks silently. Fail closed.
+        error "Cannot schedule: executable or log path contains a backslash"
+        warn "A backslash before % would defeat the escaping and silently break the job"
         return 1
     fi
     job_self=${job_self//%/\\%}
@@ -5545,6 +5662,14 @@ history_run() {
         return 1
     fi
 
+    # g log's exit status decides "unreadable repository" — a process
+    # substitution hides it, so the listing goes through a temp file and
+    # the rc is checked (pre-9.2.3 a corrupted object store silently
+    # reported an EMPTY history with rc 0, violating the
+    # history_unreadable contract).
+    local log_tmp log_rc=0
+    log_tmp=$(mktemp) || { error "Cannot create a temporary file"; return 1; }
+    temp_register "$log_tmp"
     local hash when author subject
     if (( SILENT_UI )); then
         # Machine mode: full hash (unambiguous) + ISO 8601 strict date
@@ -5556,23 +5681,30 @@ history_run() {
         # with the variables still populated — the plain `while read`
         # form silently DROPPED the newest commit (pre-9.2.0 bug).
         # `|| [[ -n $hash ]]` keeps that line.
+        g log --pretty=format:'%H%x01%cI%x01%an%x01%s' -n "$n" > "$log_tmp" 2>/dev/null || log_rc=$?
         while IFS=$'\x01' read -r hash when author subject || [[ -n "$hash" ]]; do
             [[ -n "$hash" ]] || continue
             HISTORY_COUNT=$((HISTORY_COUNT + 1))
             # 0x1f (unit separator) — subject lines are free text and can
             # contain anything except control characters.
             HISTORY_ROWS+=("$(printf '%s\x1f%s\x1f%s\x1f%s' "$hash" "$when" "$author" "$subject")")
-        done < <(g log --pretty=format:'%H%x01%cI%x01%an%x01%s' -n "$n" 2>/dev/null)
+        done < "$log_tmp"
     else
         # Human mode — byte-identical to the pre-9.2.0 output (short
         # hash, relative date), minus the dropped-newest-commit bug.
+        g log --pretty=format:'%h%x09%cr%x09%s' -n "$n" > "$log_tmp" 2>/dev/null || log_rc=$?
         while IFS=$'\t' read -r hash when subject || [[ -n "$hash" ]]; do
             [[ -n "$hash" ]] || continue
             printf '  %s%s%s  %s(%s)%s  %s\n' \
                 "$C_BRIGHT_CYAN" "$hash" "$C_RESET" \
                 "$C_DIM" "$when" "$C_RESET" \
                 "$subject"
-        done < <(g log --pretty=format:'%h%x09%cr%x09%s' -n "$n" 2>/dev/null)
+        done < "$log_tmp"
+    fi
+    if (( log_rc != 0 )); then
+        error "Repository history is unreadable"
+        warn "Fix: ob-sync repair"
+        return 1
     fi
     return 0
 }
@@ -6060,7 +6192,12 @@ main() {
     done
 
     init_colors
-    init_log
+    # `log` reads the activity log itself: creating (init_log) or
+    # stamping (the invoked row below) it here would answer a fresh
+    # machine with ob-sync's own self-row instead of the documented
+    # null document — and a >1MiB log would be rotated to .1 BEFORE the
+    # reader ever saw it (one junk row instead of the real entries).
+    [[ "${1:-}" == "log" ]] || init_log
 
     # Global signal handlers. on_exit is a no-op unless this instance
     # actually owns the lock or registered temporaries.
@@ -6083,7 +6220,9 @@ main() {
     local cmd="$1"
     shift
 
-    log "invoked: $cmd ${*:-}"
+    # See the init_log note above: `log` must observe the file, not
+    # write to it first.
+    [[ "$cmd" == "log" ]] || log "invoked: $cmd ${*:-}"
 
     # The machine-readable modes (status/restore/doctor/backup/verify/health
     # and the four data operations with --json) must emit ONLY the JSON

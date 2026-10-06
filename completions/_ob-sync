@@ -70,7 +70,8 @@ _ob_sync_cron_schedules() {
 }
 
 _ob_sync() {
-    # Global options, valid before or after the command.
+    # Global options — only valid BEFORE the command word (main()
+    # parses them positionally; every subcommand parser rejects them).
     local -a global_opts
     global_opts=(
         '(-y --yes)'{-y,--yes}'[assume yes for all interactive prompts]'

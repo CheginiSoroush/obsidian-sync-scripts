@@ -22,6 +22,11 @@ _ob_sync() {
     local commands="sync pull push quick backup restore verify repair organize
                     diff history config cron edit-conf status health doctor init remote menu
                     log help version"
+    # Flatten to one line: a word at a line end (" organize\n") does not
+    # match the space-delimited " organize " test below, so the
+    # post-command guard leaked global flags for exactly the two words
+    # that ended a line (they are parser-rejected in those positions).
+    commands=${commands//$'\n'/ }
     local global_flags="-y --yes -n --no-color -h --help -v --version"
 
     # First word: commands and global options.

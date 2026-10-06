@@ -24,7 +24,7 @@ OB="$ROOT/bin/ob-sync"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/ob-sync-tests-XXXXXX")" \
     || { echo "FATAL: cannot create the sandbox directory (TMPDIR=${TMPDIR:-unset}: $?)"; exit 1; }
 [[ -n "$SB" && -d "$SB" && -w "$SB" ]] \
-    || { echo "FATAL: sandbox '$SB' is not a writable directory — check TMPDIR='$TMPDIR'"; exit 1; }
+    || { echo "FATAL: sandbox '$SB' is not a writable directory — check TMPDIR='${TMPDIR:-}'"; exit 1; }
 trap 'rm -rf -- "$SB"' EXIT
 
 PASS=0
@@ -74,6 +74,12 @@ chmod +x "$OB"
 mkdir -p "$SB/home" "$SB/tmp"
 export HOME="$SB/home"
 export TMPDIR="$SB/tmp"
+# The suite must have ZERO side effects on the host: with XDG_CONFIG_HOME
+# set, `git config --global` would write the sandbox identity into the
+# USER's real ~/.config/git/config. GIT_CONFIG_GLOBAL (git ≥ 2.32)
+# redirects every global-config read AND write into the sandbox instead.
+unset XDG_CONFIG_HOME
+export GIT_CONFIG_GLOBAL="$SB/home/.gitconfig"
 export OBS_CONFIG="$SB/config"
 export OBS_BACKUP_DIR="$SB/backups"
 export OBS_LOG="$SB/ob.log"
@@ -1554,6 +1560,161 @@ t "cron install with % in log path" 0 \
     env OBS_CRON_LOG="$SB/logs/pct-%H.log" "${CENV[@]}" "$OB" cron install hourly
 assert "cron: % in log path escaped for cronie" grep -F '\%' "$FAKE_CRONTAB"
 "${CENV[@]}" "$OB" cron uninstall -y >/dev/null 2>&1
+
+# ═══ 37. closure-audit regressions (v9.2.3) ═══════════════════════════════
+echo
+echo "== 37. closure-audit regressions =="
+
+# 37a — restore fails closed on stray positional arguments (they used to
+# be silently ignored while the FIRST positional still drove the restore).
+t "restore rejects extra positional" 1 \
+    env OBS_VAULT="$SB/vault1" bash "$OB" restore --dry-run latest EXTRA
+t "restore rejects extra positional (json)" 1 \
+    env OBS_VAULT="$SB/vault1" bash "$OB" restore latest EXTRA --json -y
+
+# 37b — a listing-pass watchdog timeout must be labeled extraction_timeout,
+# not archive_corrupt (tar_listing_cache collapsed rc 124 into 1, which
+# made 9.2.2's mapping dead code).
+if command -v timeout >/dev/null 2>&1; then
+    REAL_TAR="$(command -v tar)"
+    S37BIN="$SB/s37bin"; mkdir -p "$S37BIN"
+    cat > "$S37BIN/tar" <<SHIM
+#!/usr/bin/env bash
+# Listing passes stall (watchdog food); every other mode delegates.
+case "\$1" in -tzf|-tvzf) sleep 5; exit 99 ;; *) exec "$REAL_TAR" "\$@" ;; esac
+SHIM
+    chmod +x "$S37BIN/tar"
+    mkdir -p "$SB/vaultT1"; printf 'timeout test\n' > "$SB/vaultT1/note.md"
+    env OBS_VAULT="$SB/vaultT1" bash "$OB" backup -y >/dev/null 2>&1
+    T1ARC="$(ls -t "$SB"/backups/*.tar.gz | head -1)"
+    assertout "restore apply: listing timeout -> extraction_timeout" '"extraction_timeout"' \
+        env PATH="$S37BIN:$PATH" OBS_LOCAL_TIMEOUT=1 OBS_VAULT="$SB/vaultT1" \
+        bash -c "${OB@Q} restore ${T1ARC@Q} --json -y || :"
+    assertout "restore --list: listing timeout labeled" "timed out" \
+        env PATH="$S37BIN:$PATH" OBS_LOCAL_TIMEOUT=1 OBS_VAULT="$SB/vaultT1" \
+        bash -c "${OB@Q} restore --list --json ${T1ARC@Q} || :"
+else
+    echo "  [SKIP] listing-timeout labeling (timeout(1) not installed)"
+fi
+
+# 37c — cron install refuses a newline inside the schedule (cronie would
+# install a rogue second job line) and a backslash in the log path (it
+# would defeat the % escaping).
+t "cron install rejects newline in schedule" 1 \
+    env OBS_CRON_LOG="$SB/logs/cron.log" "${CENV[@]}" "$OB" \
+    cron install "$(printf '0 0 * * *\nX')"
+assert "cron: newline schedule installs nothing" \
+    bash -c '! grep -q "BEGIN ob-sync" "$FAKE_CRONTAB"'
+t "cron install rejects backslash in log path" 1 \
+    env OBS_CRON_LOG="$SB/logs/bs\\%Y.log" "${CENV[@]}" "$OB" cron install hourly
+"${CENV[@]}" "$OB" cron uninstall -y >/dev/null 2>&1
+
+# 37d — `log` observes the activity log, it never creates or stamps it:
+# a fresh machine answers with the documented null document.
+FRESHLOG="$SB/fresh.log"
+rm -f "$FRESHLOG"
+t "log --json fresh machine: rc 0" 0 \
+    env OBS_LOG="$FRESHLOG" OBS_VAULT="$SB/vault1" bash "$OB" log --json
+assert "log --json fresh machine: log_file null" \
+    env OBS_LOG="$FRESHLOG" OBS_VAULT="$SB/vault1" bash -c \
+    "${OB@Q} log --json | grep -q '\"log_file\": null'"
+assert "log --json fresh machine: count 0" \
+    env OBS_LOG="$FRESHLOG" OBS_VAULT="$SB/vault1" bash -c \
+    "${OB@Q} log --json | grep -q '\"count\": 0'"
+assert "log command does not create the log file" \
+    bash -c "[[ ! -e '$FRESHLOG' ]]"
+assertout "log human fresh machine: friendly message" "No log file available" \
+    env OBS_LOG="$FRESHLOG" OBS_VAULT="$SB/vault1" bash "$OB" log
+
+# 37e — a >1MiB log is READ, not rotated out from under the reader (the
+# old flow answered `log` with one junk self-row; the real rows were in .1).
+BIGLOG="$SB/big.log"
+awk 'BEGIN { for (i = 0; i < 30000; i++) \
+    printf "[2025-01-01 00:00:00] [test          ] seed row %d\n", i }' > "$BIGLOG"
+assertout "log --json on >1MiB log shows real rows" "seed row 29999" \
+    env OBS_LOG="$BIGLOG" OBS_VAULT="$SB/vault1" bash "$OB" log --json
+assert "log command does not rotate the log" \
+    bash -c "[[ -f '$BIGLOG' && ! -f '$BIGLOG.1' ]]"
+rm -f "$BIGLOG" "$BIGLOG.1"
+
+# 37f — a corrupted object store fails loudly (history_unreadable), not
+# as a silent empty history.
+H1="$SB/vaultHist"; mkdir -p "$H1"
+git -C "$H1" init -q
+printf 'a\n' > "$H1/a.md"; git -C "$H1" add -A
+git -C "$H1" -c user.name=suite -c user.email=suite@local commit -qm one
+printf 'b\n' > "$H1/b.md"; git -C "$H1" add -A
+git -C "$H1" -c user.name=suite -c user.email=suite@local commit -qm two
+HHASH="$(git -C "$H1" rev-parse HEAD)"
+HOBJ="$H1/.git/objects/${HHASH:0:2}/${HHASH:2}"
+# Loose objects are stored read-only (444) — lift the bit before truncating.
+chmod 644 "$HOBJ" && : > "$HOBJ"
+t "history --json corrupted repo: rc 1" 1 \
+    env OBS_VAULT="$H1" bash "$OB" history --json
+assertout "history --json corrupted repo: history_unreadable" "history_unreadable" \
+    bash -c "env OBS_VAULT='$H1' ${OB@Q} history --json 2>/dev/null || :"
+t "history human corrupted repo: rc 1" 1 \
+    env OBS_VAULT="$H1" bash "$OB" history
+
+# 37g — doctor makes exactly ONE remote call, even against a dead remote
+# (pre-9.2.3: up to three watchdog burns ≈ 3 × OBS_GIT_TIMEOUT).
+GSHIM="$SB/s37git"; mkdir -p "$GSHIM"
+CALLLOG="$SB/s37-git-calls.log"; : > "$CALLLOG"
+REAL_GIT="$(command -v git)"
+cat > "$GSHIM/git" <<SHIM
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$CALLLOG"
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$GSHIM/git"
+D1="$SB/vaultDoc1"; mkdir -p "$D1"; git -C "$D1" init -q
+printf 'x\n' > "$D1/n.md"; git -C "$D1" add -A
+git -C "$D1" -c user.name=suite -c user.email=suite@local commit -qm base
+t "doctor --json dead remote: rc 0" 0 \
+    env PATH="$GSHIM:$PATH" OBS_VAULT="$D1" OBS_REMOTE="https://127.0.0.1:1/repo.git" \
+    bash "$OB" doctor --json
+assert "doctor dead remote: exactly one ls-remote" \
+    bash -c "[[ \"\$(grep -c 'ls-remote' '$CALLLOG' || :)\" == '1' ]]"
+: > "$CALLLOG"
+R1="$SB/remote37.git"; git init -q --bare "$R1"
+D2="$SB/vaultDoc2"; mkdir -p "$D2"; git -C "$D2" init -q
+printf 'x\n' > "$D2/n.md"; git -C "$D2" add -A
+git -C "$D2" -c user.name=suite -c user.email=suite@local commit -qm base
+git -C "$D2" remote add origin "$R1"
+git -C "$D2" push -q "$R1" main
+assertout "doctor reachable: default branch from same call" \
+    "Remote default branch 'main' matches" \
+    env PATH="$GSHIM:$PATH" OBS_VAULT="$D2" OBS_REMOTE="$R1" bash "$OB" doctor
+assert "doctor reachable remote: exactly one ls-remote" \
+    bash -c "[[ \"\$(grep -c 'ls-remote' '$CALLLOG' || :)\" == '1' ]]"
+
+# 37h — completions: global flags are never offered after the command
+# word ("organize"/"menu" ended a line in the command list and leaked).
+COMPL="$ROOT/completions/ob-sync.bash"
+assert "completion: organize keeps globals out" \
+    bash -c "
+        source '$COMPL' 2>/dev/null || exit 1
+        COMP_WORDS=(ob-sync organize --fix -); COMP_CWORD=3; COMPREPLY=()
+        _ob_sync || exit 1
+        for w in \${COMPREPLY[@]}; do
+            [[ \"\$w\" == -v || \"\$w\" == --version || \"\$w\" == -n || \"\$w\" == --no-color ]] && exit 1
+        done
+        exit 0"
+assert "completion: menu keeps globals out" \
+    bash -c "
+        source '$COMPL' 2>/dev/null || exit 1
+        COMP_WORDS=(ob-sync menu -); COMP_CWORD=2; COMPREPLY=()
+        _ob_sync || exit 1
+        for w in \${COMPREPLY[@]}; do
+            [[ \"\$w\" == -v || \"\$w\" == --version || \"\$w\" == -n || \"\$w\" == --no-color ]] && exit 1
+        done
+        exit 0"
+assert "completion: first word still offers globals" \
+    bash -c "
+        source '$COMPL' 2>/dev/null || exit 1
+        COMP_WORDS=(ob-sync -); COMP_CWORD=1; COMPREPLY=()
+        _ob_sync || exit 1
+        [[ \${COMPREPLY[*]} == *--version* ]]"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

@@ -4,6 +4,68 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.2.3] — The closure audit: honest failures, no dead waits
+
+A second full line-by-line pass over every file (10 review scopes, every
+suspicion repro-verified) caught the leftovers. Nothing user-visible was
+broken by 9.2.2 — these are the corners only an adversarial audit reaches.
+
+### Fixed
+
+- **Listing timeouts are labeled truthfully again** — `tar_listing_cache`
+  collapsed the watchdog's rc 124 into a generic failure, which made
+  9.2.2's `extraction_timeout` mapping dead code: a slow/huge archive
+  still reported `archive_corrupt`. The human preview, the JSON preview
+  and the apply gate all report `extraction_timeout` now.
+- **`restore` fails closed on stray arguments** — `restore <target>
+  <garbage>` silently ignored the extra positional while the first one
+  still drove a destructive restore. Rejected with rc 1, same contract
+  as `backup`/`verify`.
+- **The interactive backup pick parses base 10** — a zero-padded `010`
+  was evaluated as octal and selected backup #8.
+- **`doctor` makes exactly one remote call** — an unreachable remote
+  burned the network watchdog up to three times (~3 × OBS_GIT_TIMEOUT
+  of dead waiting; ~6 minutes at the default on a phone). One
+  `ls-remote --symref` now answers reachability, empty-repository
+  detection and the default branch, and the default-branch probe only
+  runs when the remote actually answered.
+- **A corrupted object store fails loudly** — `history` (human and
+  `--json`) read `git log`'s exit status through a process substitution,
+  which hid it: a corrupted repository silently reported an EMPTY
+  history with rc 0. It now reports `history_unreadable` (rc 1) as the
+  contract promises.
+- **`log` / `log --json` observe, they never write** — `main()` created
+  and stamped the activity log before dispatch, so a fresh machine's
+  first `log --json` answered with ob-sync's own "invoked" row instead
+  of the documented `log_file: null, count: 0` document; and on a
+  >1 MiB log the same flow rotated the file first, answering with one
+  junk row while the real entries moved to `ob-sync.log.1`. The `log`
+  command no longer creates, stamps or rotates anything.
+- **`cron install` refuses impossible schedules** — a newline inside the
+  schedule expression passed validation (only the first line was read)
+  and installed a rogue second job line; `%`, `\` and newlines in the
+  schedule are refused outright, and a backslash in the executable/log
+  path is refused too (a `\` before the escaped `%` would defeat the
+  escaping and break the job silently).
+- **Completions: the last global-flag leak** — the command list was laid
+  out over multiple lines, and the space-delimited match only saw the
+  words that ended a line (`organize`, `menu`): global flags were
+  offered after them although the parser rejects them there. The list
+  is flattened before matching. The zsh twin's comment now matches its
+  behavior.
+- **Test suite: zero host side effects** — with `XDG_CONFIG_HOME` set,
+  `git config --global` wrote the sandbox identity into the user's real
+  XDG git config; `GIT_CONFIG_GLOBAL` now pins every global-config
+  access into the sandbox. A latent `set -u` crash in a diagnostics
+  message is guarded too.
+
+### Added
+
+- Test section 37: 24 regression assertions covering every fix above
+  (timeout labeling via a stalling tar shim, doctor call-counting via a
+  git shim, corrupted-object history, fresh-machine log contract,
+  >1 MiB rotation behavior, cron schedule refusals, completion matrix).
+
 ## [9.2.2] — The line-by-line audit: mobile onboarding, honest JSON & concurrency corners
 
 ### Fixed
