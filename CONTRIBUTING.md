@@ -30,7 +30,7 @@ platform differences belong behind the portability helpers inside the script.
 3. Run the functional test suite (self-contained, ~2s, no network):
 
    ```bash
-   bash tests/run-tests.sh    # currently 316 assertions, must all pass
+   bash tests/run-tests.sh    # currently 330 assertions, must all pass
    ```
 
 4. Smoke-test on a real device or machine:

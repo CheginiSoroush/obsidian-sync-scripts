@@ -1716,6 +1716,44 @@ assert "completion: first word still offers globals" \
         _ob_sync || exit 1
         [[ \${COMPREPLY[*]} == *--version* ]]"
 
+echo "== 38. v9.3.0: repair over a file .git + menu Init =="
+# 9.3.0 scenario: on Android shared storage an interrupted I/O can leave
+# .git as a truncated plain FILE — the old execute_repair hit
+# "Failed to install repaired .git" because mv refuses to rename a
+# directory onto a non-directory. The parked-file + copy-fallback fix
+# must recover end to end.
+git init -q --bare "$SB/remote38.git"
+mkdir -p "$SB/vault38"
+printf '# note38\n' > "$SB/vault38/note38.md"
+t "38 setup: init"     0 env OBS_REMOTE="$SB/remote38.git" OBS_VAULT="$SB/vault38" "$OB" init -y
+t "38 setup: sync"     0 env OBS_REMOTE="$SB/remote38.git" OBS_VAULT="$SB/vault38" "$OB" sync -y
+rm -rf "$SB/vault38/.git"
+printf 'garbage-truncated-io' > "$SB/vault38/.git"
+t "38 health flags file .git"   1 env OBS_VAULT="$SB/vault38" "$OB" health
+t "38 repair over file .git"    0 env OBS_REMOTE="$SB/remote38.git" OBS_VAULT="$SB/vault38" "$OB" repair -y
+assert "38 warns about non-directory .git" \
+    bash -c "grep -qF 'not a directory' '$SB/out.txt'"
+assert "38 .git is a directory again" test -d "$SB/vault38/.git"
+assert "38 HEAD readable again" test -f "$SB/vault38/.git/HEAD"
+t "38 health after file-repair" 0 env OBS_VAULT="$SB/vault38" "$OB" health
+assert "38 no staging leftovers" \
+    bash -c "! ls -d '$SB/vault38'/'.git-staged-'* >/dev/null 2>&1"
+
+# The menu exposes Init (18) — first-time setup is no longer CLI-only.
+assert "menu lists 18) Init" \
+    bash -c "printf '0\n' | env OBS_VAULT='$SB/vault38' '$OB' menu 2>&1 | grep -qF '18) Init'"
+assert "menu prompt offers 0-18" \
+    bash -c "grep -qF 'Select an option [0-18]: ' '$ROOT/bin/ob-sync'"
+
+# Menu choice 18 routes to init: a NEW empty vault (no .git) with OBS_REMOTE
+# preset runs the non-interactive link flow and leaves a real repository.
+mkdir -p "$SB/vault38b"
+printf '# fresh vault\n' > "$SB/vault38b/fresh.md"
+assert "menu choice 18 dispatches init" \
+    bash -c "printf '18\n0\n' | env OBS_VAULT='$SB/vault38b' OBS_REMOTE='$SB/remote38.git' '$OB' menu >/dev/null 2>&1"
+assert "38 menu-init created a repository" test -d "$SB/vault38b/.git"
+t "38 menu-init vault is healthy" 0 env OBS_VAULT="$SB/vault38b" "$OB" health
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" == 0 ]]

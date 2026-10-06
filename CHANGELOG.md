@@ -4,6 +4,41 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.3.0] — Repair that tells the truth + Init joins the menu
+
+Field reports from Termux (a vault on Android shared storage whose
+`repair` died at the atomic swap) drove both changes: make the failure
+honest and recoverable, and put first-time setup where phone users
+actually live — the menu.
+
+### Added
+
+- **Menu option 18) Init** — first-time setup is no longer CLI-only.
+  The menu walks the same `cmd_init` flow the terminal always had:
+  keep or change the vault path, enter the new remote URL, and ob-sync
+  either links the existing vault to it (`git init` + additive
+  history alignment) or clones a fresh vault when the directory is
+  empty. The prompt now reads `Select an option [0-18]`.
+
+### Fixed
+
+- **`repair` survives a `.git` that died as a plain file** — on shared
+  storage, interrupted I/O can leave `.git` as a truncated FILE or a
+  stale symlink. The old swap refused to rename a directory onto a
+  non-directory target and reported a bare "Failed to install repaired
+  .git" with the real error swallowed. The corrupt file is now parked
+  in the rollback holder with a warning, exactly like a corrupt
+  directory, and the repaired repository installs cleanly (repro: the
+  suite's file-`.git` scenario, section 38).
+- **`repair` falls back to a copy install when the mount refuses
+  rename** — some FUSE configurations reject renaming a directory
+  into a freshly vacated name. The install now retries as
+  `mkdir + cp + HEAD-verified` before giving up, and every failure
+  path prints the operating system's own message (`mv said: …` /
+  `rollback said: …` / `cp -a said: …`) instead of discarding it
+  behind `2>/dev/null`. The rollback and the pre-repair backup still
+  cover every path.
+
 ## [9.2.3] — The closure audit: honest failures, no dead waits
 
 A second full line-by-line pass over every file (10 review scopes, every

@@ -6,7 +6,7 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#   Version   : 9.2.3
+#   Version   : 9.3.0
 #   Author    : Soroush Chegini
 #   License   : MIT
 #   Repository: https://github.com/CheginiSoroush/obsidian-sync-scripts
@@ -34,6 +34,23 @@
 #       · One core          — platform differences live behind portability
 #                             helpers, never in forks of this script
 #       · Graceful failure  — errors report and return; nothing exits silently
+#
+#   RELEASE NOTES — 9.3.0 (repair that tells the truth + menu-init)
+#       · menu gains 18) Init: first-time setup is no longer CLI-only —
+#         pick a vault (or keep the current one), enter the new remote
+#         URL, and ob-sync either links the existing vault to it (git
+#         init + additive history alignment) or clones a fresh one.
+#       · repair no longer fails silently on hostile shared storage:
+#         the install swap captures the OS error and prints it ("mv
+#         said: …") instead of swallowing it behind 2>/dev/null. A
+#         .git that died as a truncated FILE or stale symlink (both
+#         seen on Android FUSE after interrupted I/O) no longer blocks
+#         the swap — it is parked in the rollback holder with a
+#         warning, exactly like a corrupt directory. And if the final
+#         rename is refused by the mount, the install falls back to a
+#         copy-based one (mkdir + cp + HEAD verified) before giving
+#         up; the rollback and the pre-repair backup still cover every
+#         path. The staging-failure path reports the cp error too.
 #
 #   RELEASE NOTES — 9.2.3 (closure audit: honest failures, no dead waits)
 #       · restore rejects extra positional arguments (fail-closed, same
@@ -370,7 +387,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.2.3"
+readonly VERSION="9.3.0"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -1819,14 +1836,28 @@ execute_repair() {
     }
     temp_register "$staged"
 
-    if ! cp -a "$candidate/repo/.git/." "$staged/" 2>/dev/null; then
+    local stage_err=""
+    if ! stage_err=$(cp -a "$candidate/repo/.git/." "$staged/" 2>&1); then
         # Fallback for filesystems that refuse permission preservation
         # (some FUSE mounts used by Android shared storage behave this way).
         if ! cp -R "$candidate/repo/.git/." "$staged/" 2>/dev/null; then
             purge "$candidate" "$staged"
             error "Failed to stage git metadata"
+            [[ -n "$stage_err" ]] && warn "cp -a said: $stage_err"
             return 1
         fi
+    fi
+
+    # Classify the current .git so the install step can never be blocked
+    # by a non-directory target. A .git that is neither a healthy
+    # directory nor absent (a truncated plain file or a stale symlink —
+    # both seen when shared-storage I/O dies mid-write) is corrupt by
+    # definition and is parked in the rollback holder like any other.
+    local old_kind=""
+    if [[ -d "$VAULT/.git" ]]; then
+        old_kind="dir"
+    elif [[ -e "$VAULT/.git" || -L "$VAULT/.git" ]]; then
+        old_kind="other"
     fi
 
     # Preserve the original .git so every failure path can roll back.
@@ -1834,25 +1865,41 @@ execute_repair() {
     # user's original history and must survive an interruption. The next
     # run's clean_repair_artifacts sweeps it, and the pre-repair backup
     # above is the ultimate safety net.
-    if [[ -d "$VAULT/.git" ]]; then
+    if [[ -n "$old_kind" ]]; then
         old_holder=$(mktemp -d "$VAULT/.git-old-XXXXXX") || {
             purge "$candidate" "$staged"
             error "Failed to create rollback area"
             return 1
         }
-        mv "$VAULT/.git" "$old_holder/git" 2>/dev/null || {
+        local keep_err=""
+        if ! keep_err=$(mv "$VAULT/.git" "$old_holder/git" 2>&1); then
             purge "$candidate" "$staged" "$old_holder"
             error "Failed to preserve original .git"
+            [[ -n "$keep_err" ]] && warn "mv said: $keep_err"
             return 1
-        }
+        fi
+        [[ "$old_kind" == "other" ]] && \
+            warn "Corrupt .git (not a directory) preserved in the rollback area"
     fi
 
-    # Atomic swap. On failure, roll the original .git back into place.
-    if ! mv "$staged" "$VAULT/.git" 2>/dev/null; then
-        [[ -n "$old_holder" ]] && mv "$old_holder/git" "$VAULT/.git" 2>/dev/null
-        purge "$candidate" "$staged" "$old_holder"
-        error "Failed to install repaired .git"
-        return 1
+    # Atomic swap. On failure, fall back to a copy-based install (some
+    # shared-storage mounts refuse to rename a directory into a freshly
+    # vacated name); if even that fails, roll the original .git back.
+    local install_err=""
+    if ! install_err=$(mv "$staged" "$VAULT/.git" 2>&1); then
+        if mkdir "$VAULT/.git" 2>/dev/null \
+                && cp -R "$staged/." "$VAULT/.git/" 2>/dev/null \
+                && [[ -f "$VAULT/.git/HEAD" ]]; then
+            info "rename unavailable on this filesystem — installed via copy"
+        else
+            local back_err=""
+            [[ -n "$old_holder" ]] && back_err=$(mv "$old_holder/git" "$VAULT/.git" 2>&1)
+            purge "$candidate" "$staged" "$old_holder"
+            error "Failed to install repaired .git"
+            [[ -n "$install_err" ]] && warn "mv said: $install_err"
+            [[ -n "$back_err" ]] && warn "rollback said: $back_err"
+            return 1
+        fi
     fi
     success "Git metadata replaced atomically"
 
@@ -5880,6 +5927,7 @@ show_menu() {
     printf '  %s15)%s Remote    %sshow or set the remote%s\n'    "$C_BRIGHT_GREEN"   "$C_RESET" "$C_DIM" "$C_RESET"
     printf '  %s16)%s Cron      %sschedule automatic syncs%s\n'  "$C_BRIGHT_MAGENTA" "$C_RESET" "$C_DIM" "$C_RESET"
     printf '  %s17)%s EditConf  %sedit the config file%s\n'      "$C_BRIGHT_YELLOW"  "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s18)%s Init      %snew vault / first-time setup%s\n' "$C_BRIGHT_CYAN"    "$C_RESET" "$C_DIM" "$C_RESET"
     printf '  %s0)%s Exit     %squit the tool%s\n'                 "$C_BRIGHT_RED"     "$C_RESET" "$C_DIM" "$C_RESET"
     echo
     printf '  %s------------------------------------------%s\n' "$C_DIM" "$C_RESET"
@@ -5895,7 +5943,7 @@ main_menu() {
     while true; do
         show_menu
         local choice=""
-        read -r -p "  Select an option [0-17]: " choice || { echo; exit 0; }
+        read -r -p "  Select an option [0-18]: " choice || { echo; exit 0; }
 
         case "$choice" in
             1)  dispatch sync ;;
@@ -5915,6 +5963,7 @@ main_menu() {
             15) dispatch remote ;;
             16) dispatch cron ;;
             17) dispatch edit-conf ;;
+            18) dispatch init ;;
             0)  echo; success "Goodbye!"; echo; exit 0 ;;
             *)  error "Invalid choice: $choice"; sleep 1; continue ;;
         esac
