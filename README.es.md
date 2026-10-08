@@ -29,7 +29,7 @@
   <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts/stargazers"><img src="https://img.shields.io/github/stars/CheginiSoroush/obsidian-sync-scripts?style=for-the-badge&logo=github&logoColor=white&labelColor=0D1117" alt="GitHub stars"></a>
   <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts/issues"><img src="https://img.shields.io/github/issues/CheginiSoroush/obsidian-sync-scripts?style=for-the-badge&logo=github&logoColor=white&labelColor=0D1117" alt="Open issues"></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-00C896?style=for-the-badge&logo=github&logoColor=white&labelColor=0D1117" alt="PRs welcome"></a>
-  <img src="https://img.shields.io/badge/docs-EN%20%7C%20FA%20%7C%20ES-00B4D8?style=for-the-badge&labelColor=0D1117" alt="Trilingual documentation">
+  <a href="https://cheginisoroush.github.io/obsidian-sync-scripts/"><img src="https://img.shields.io/badge/docs-site-EN%20%7C%20FA%20%7C%20ES-00B4D8?style=for-the-badge&labelColor=0D1117" alt="Documentation site: English · فارسی · Español"></a>
 </p>
 
 <p align="center">
