@@ -38,6 +38,7 @@ body{background:var(--bg);color:var(--tx);font-family:"Segoe UI",system-ui,-appl
 html[lang="fa"] body{font-family:Vazirmatn,"Segoe UI",Tahoma,sans-serif;line-height:1.85}
 [hidden]{display:none!important}
 a{color:var(--cyn);text-decoration:none}
+code{overflow-wrap:anywhere}
 a:hover{text-decoration:underline}
 .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
 /* ── nav ── */
@@ -81,10 +82,19 @@ section{padding:56px 0;border-top:1px solid var(--line)}
 h2{font-size:clamp(1.5rem,3vw,2.1rem);font-weight:800;margin-bottom:10px}
 .sub{color:var(--dim);max-width:640px;margin-bottom:32px}
 .grid{display:grid;gap:16px}
-.g3{grid-template-columns:repeat(3,1fr)}
-.g2{grid-template-columns:repeat(2,1fr)}
-@media (max-width:900px){.g3{grid-template-columns:repeat(2,1fr)}}
-@media (max-width:620px){.g3,.g2{grid-template-columns:1fr}}
+.grid>*,.mgrid>*{min-width:0}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:900px){.g3{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.g3,.g2{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:620px){
+  section{padding:40px 0}
+  .hero{padding:44px 0 28px}
+  .plat,.card{padding:18px}
+  .ctaband{padding:28px 18px}
+  .codeblk pre{white-space:pre-wrap;word-break:break-word}
+  .copy{padding:8px 12px;font-size:.78rem}
+}
 .card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:22px;transition:border-color .2s,transform .2s}
 .card:hover{border-color:var(--grn);transform:translateY(-2px)}
 .card .ico{font-size:1.5rem;margin-bottom:10px;display:block}
@@ -106,9 +116,9 @@ h2{font-size:clamp(1.5rem,3vw,2.1rem);font-weight:800;margin-bottom:10px}
 html[dir="rtl"] .note{border-radius:8px 0 0 8px}
 .note b{color:var(--ylw)}
 /* menu chips */
-.mgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:26px 0}
-@media (max-width:900px){.mgrid{grid-template-columns:repeat(3,1fr)}}
-@media (max-width:620px){.mgrid{grid-template-columns:repeat(2,1fr)}}
+.mgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:26px 0}
+@media (max-width:900px){.mgrid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:620px){.mgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .mi{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:10px 13px;font-size:.85rem}
 .mi .n{font-family:var(--mono);color:var(--grn);font-weight:700;margin-inline-end:7px}
 .mi .t{font-weight:600}
