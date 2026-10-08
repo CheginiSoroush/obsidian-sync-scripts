@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ob-sync — Obsidian ↔ Git sync for Termux, Linux &amp; macOS</title>
+<meta name="description" content="ob-sync: enterprise-grade Obsidian ↔ Git sync from your phone or desktop. One bash script, zero dependencies, 330 tests, honest repair, and a menu-driven Init wizard. Trilingual docs: English, فارسی, Español.">
+<link rel="canonical" href="https://cheginisoroush.github.io/obsidian-sync-scripts/">
+<meta name="theme-color" content="#0d1117">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ob-sync">
+<meta property="og:title" content="ob-sync — Obsidian ↔ Git sync for Termux, Linux &amp; macOS">
+<meta property="og:description" content="One bash script. Three platforms. Nine layers of defense. 330 tests. Honest repair + Init wizard in v9.3.0.">
+<meta property="og:url" content="https://cheginisoroush.github.io/obsidian-sync-scripts/">
+<meta property="og:image" content="https://cheginisoroush.github.io/obsidian-sync-scripts/assets/social-banner.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ob-sync — Obsidian ↔ Git sync for Termux, Linux &amp; macOS">
+<meta name="twitter:description" content="One bash script. Three platforms. Nine layers of defense. 330 tests. Honest repair + Init wizard in v9.3.0.">
+<meta name="twitter:image" content="https://cheginisoroush.github.io/obsidian-sync-scripts/assets/social-banner.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1117'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='%2300C896' font-family='monospace'%3E%E2%86%94%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;800&display=swap" rel="stylesheet">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"ob-sync","operatingSystem":"Android, Linux, macOS","applicationCategory":"DeveloperApplication","softwareVersion":"9.3.0","license":"https://opensource.org/licenses/MIT","description":"Enterprise-grade Obsidian ↔ Git sync: one bash script for Termux, Linux and macOS. Backups, honest repair, Init wizard, 330 tests.","url":"https://cheginisoroush.github.io/obsidian-sync-scripts/","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+</script>
+<style>
+:root{
+  --bg:#0d1117;--bg2:#161b22;--bg3:#1c2330;--line:#30363d;--tx:#e6edf3;--dim:#8b949e;
+  --grn:#00c896;--cyn:#00b4d8;--ylw:#e3b341;--red:#ff6b6b;--mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important;animation:none!important}}
+body{background:var(--bg);color:var(--tx);font-family:"Segoe UI",system-ui,-apple-system,sans-serif;line-height:1.65;-webkit-font-smoothing:antialiased}
+html[lang="fa"] body{font-family:Vazirmatn,"Segoe UI",Tahoma,sans-serif;line-height:1.85}
+[hidden]{display:none!important}
+a{color:var(--cyn);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+/* ── nav ── */
+.nav{position:sticky;top:0;z-index:50;background:rgba(13,17,23,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.nav .wrap{display:flex;align-items:center;gap:18px;height:60px}
+.brand{font-family:var(--mono);font-weight:700;font-size:1.15rem;color:var(--tx)}
+.brand b{color:var(--grn)}
+.navlinks{display:flex;gap:16px;margin-inline-start:auto;align-items:center}
+.navlinks a{color:var(--dim);font-size:.92rem}
+.navlinks a:hover{color:var(--tx);text-decoration:none}
+.langbtns{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.langbtns button{background:transparent;border:0;color:var(--dim);padding:6px 12px;cursor:pointer;font:inherit;font-size:.85rem;min-height:36px}
+.langbtns button.on{background:var(--bg3);color:var(--grn);font-weight:700}
+@media (max-width:720px){.navlinks a{display:none}}
+/* ── hero ── */
+.hero{padding:64px 0 40px;background:radial-gradient(ellipse 80% 60% at 50% -10%,rgba(0,200,150,.09),transparent)}
+.kicker{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+.chip{font-family:var(--mono);font-size:.78rem;padding:3px 11px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
+.chip.g{color:var(--grn);border-color:rgba(0,200,150,.4)}
+.chip.c{color:var(--cyn);border-color:rgba(0,180,216,.4)}
+.chip.y{color:var(--ylw);border-color:rgba(227,179,65,.4)}
+h1{font-size:clamp(2rem,5.2vw,3.3rem);line-height:1.15;font-weight:800;letter-spacing:-.02em;max-width:820px}
+h1 .hl{background:linear-gradient(92deg,var(--grn),var(--cyn));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{margin:18px 0 26px;font-size:1.08rem;color:var(--dim);max-width:720px}
+.ctas{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:44px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:11px 22px;border-radius:10px;font-weight:700;font-size:.95rem;min-height:44px}
+.btn:hover{text-decoration:none;transform:translateY(-1px)}
+.btn.p{background:linear-gradient(92deg,var(--grn),#00b488);color:#04110c}
+.btn.s{border:1px solid var(--line);color:var(--tx)}
+.btn.s:hover{border-color:var(--dim)}
+/* terminal */
+.term{background:var(--bg2);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,.4);max-width:760px}
+.tbar{display:flex;gap:7px;padding:11px 14px;background:var(--bg3);border-bottom:1px solid var(--line)}
+.tbar i{width:11px;height:11px;border-radius:50%;display:block}
+.tbar i:nth-child(1){background:#ff5f56}.tbar i:nth-child(2){background:#ffbd2e}.tbar i:nth-child(3){background:#27c93f}
+.term pre{padding:18px 20px;font-family:var(--mono);font-size:.85rem;line-height:1.7;overflow-x:auto;direction:ltr;text-align:left}
+.term .g{color:var(--grn)}.term .c{color:var(--cyn)}.term .d{color:var(--dim)}.term .y{color:var(--ylw)}.term .w{color:var(--tx)}
+/* ── sections ── */
+section{padding:56px 0;border-top:1px solid var(--line)}
+.eyebrow{font-family:var(--mono);color:var(--grn);font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px}
+h2{font-size:clamp(1.5rem,3vw,2.1rem);font-weight:800;margin-bottom:10px}
+.sub{color:var(--dim);max-width:640px;margin-bottom:32px}
+.grid{display:grid;gap:16px}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g2{grid-template-columns:repeat(2,1fr)}
+@media (max-width:900px){.g3{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:620px){.g3,.g2{grid-template-columns:1fr}}
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:22px;transition:border-color .2s,transform .2s}
+.card:hover{border-color:var(--grn);transform:translateY(-2px)}
+.card .ico{font-size:1.5rem;margin-bottom:10px;display:block}
+.card h3{font-size:1.02rem;margin-bottom:8px}
+.card p{color:var(--dim);font-size:.92rem}
+.card code{font-family:var(--mono);font-size:.85em;color:var(--cyn);background:var(--bg3);padding:1px 6px;border-radius:5px;direction:ltr;unicode-bidi:embed}
+.tag{font-family:var(--mono);font-size:.68rem;color:var(--bg);background:var(--grn);padding:2px 8px;border-radius:999px;vertical-align:middle;margin-inline-start:6px;font-weight:700}
+/* install */
+.plat{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:24px}
+.plat h3{display:flex;align-items:center;gap:10px;margin-bottom:14px;font-size:1.05rem}
+.step{display:flex;gap:12px;margin-bottom:14px}
+.step b{flex:0 0 26px;height:26px;border-radius:50%;background:var(--bg3);border:1px solid var(--line);display:inline-flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:.78rem;color:var(--grn)}
+.step p{color:var(--dim);font-size:.92rem}
+.codeblk{position:relative;background:var(--bg);border:1px solid var(--line);border-radius:9px;margin-top:8px}
+.codeblk pre{padding:14px 44px 14px 16px;font-family:var(--mono);font-size:.83rem;overflow-x:auto;direction:ltr;text-align:left;color:#d2e3d5}
+.copy{position:absolute;top:8px;inset-inline-end:8px;background:var(--bg3);border:1px solid var(--line);color:var(--dim);border-radius:6px;padding:4px 9px;font-size:.72rem;cursor:pointer;font-family:var(--mono)}
+.copy:hover{color:var(--grn);border-color:var(--grn)}
+.note{margin-top:14px;border-inline-start:3px solid var(--ylw);background:rgba(227,179,65,.07);padding:12px 16px;border-radius:0 8px 8px 0;font-size:.88rem;color:var(--dim)}
+html[dir="rtl"] .note{border-radius:8px 0 0 8px}
+.note b{color:var(--ylw)}
+/* menu chips */
+.mgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:26px 0}
+@media (max-width:900px){.mgrid{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:620px){.mgrid{grid-template-columns:repeat(2,1fr)}}
+.mi{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:10px 13px;font-size:.85rem}
+.mi .n{font-family:var(--mono);color:var(--grn);font-weight:700;margin-inline-end:7px}
+.mi .t{font-weight:600}
+.mi small{display:block;color:var(--dim);font-size:.74rem;margin-top:2px}
+.mi.hot{border-color:rgba(0,200,150,.55);background:rgba(0,200,150,.06)}
+.mi .new{float:inline-end;font-family:var(--mono);font-size:.62rem;background:var(--grn);color:var(--bg);border-radius:999px;padding:1px 7px;font-weight:700}
+.menuimg{width:100%;max-width:560px;display:block;margin:10px auto;border-radius:12px;border:1px solid var(--line)}
+.cap{text-align:center;color:var(--dim);font-size:.85rem;margin-top:10px}
+/* faq */
+details{background:var(--bg2);border:1px solid var(--line);border-radius:10px;margin-bottom:10px;overflow:hidden}
+details[open]{border-color:rgba(0,200,150,.4)}
+summary{cursor:pointer;padding:15px 18px;font-weight:600;list-style:none;display:flex;align-items:center;gap:10px;min-height:44px}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"+";font-family:var(--mono);color:var(--grn);font-size:1.1rem;font-weight:700}
+details[open] summary::before{content:"–"}
+details .a{padding:0 18px 16px;color:var(--dim);font-size:.93rem}
+details .a code{font-family:var(--mono);font-size:.85em;color:var(--cyn);background:var(--bg3);padding:1px 6px;border-radius:5px;direction:ltr;unicode-bidi:embed}
+/* cta */
+.ctaband{background:linear-gradient(120deg,rgba(0,200,150,.12),rgba(0,180,216,.10));border:1px solid rgba(0,200,150,.35);border-radius:16px;padding:38px 30px;text-align:center}
+.ctaband h2{margin-bottom:8px}
+.ctaband p{color:var(--dim);margin-bottom:22px}
+/* footer */
+footer{border-top:1px solid var(--line);padding:28px 0;margin-top:56px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;color:var(--dim);font-size:.85rem}
+footer a{color:var(--dim)}
+footer a:hover{color:var(--grn)}
+.safe{display:block;min-height:env(safe-area-inset-bottom)}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top">ob<b>↔</b>sync</a>
+    <nav class="navlinks" aria-label="Sections">
+      <a href="#features">Features</a><a href="#install">Install</a><a href="#menu">Menu</a><a href="#faq">FAQ</a>
+      <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts" aria-label="GitHub repository">GitHub&nbsp;↗</a>
+      <div class="langbtns" role="group" aria-label="Language">
+        <button type="button" id="btn-en" class="on" onclick="setLang('en')">EN</button>
+        <button type="button" id="btn-fa" onclick="setLang('fa')">فارسی</button>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- ══════════════ ENGLISH ══════════════ -->
+<div id="lang-en" lang="en" dir="ltr">
+
+  <div class="wrap">
+    <div class="hero">
+      <div class="kicker">
+        <span class="chip c">v9.3.0</span><span class="chip g">✔ 330 tests passing</span><span class="chip">MIT license</span><span class="chip y">Android · Linux · macOS</span>
+      </div>
+      <h1>Your vault. Every device. <span class="hl">Always in sync.</span></h1>
+      <p class="lead">ob-sync is enterprise-grade Obsidian ↔ Git sync in a single bash script — no daemons, no plugins, no extra dependencies. Checksummed backups before every risky move, a repair mode that tells the truth about failures, and a menu wizard that connects a brand-new vault in seconds.</p>
+      <div class="ctas">
+        <a class="btn p" href="#install">Get started →</a>
+        <a class="btn s" href="https://github.com/CheginiSoroush/obsidian-sync-scripts">View on GitHub&nbsp;↗</a>
+      </div>
+      <div class="term" role="img" aria-label="ob-sync interactive menu preview">
+        <div class="tbar"><i></i><i></i><i></i></div>
+<pre><span class="d">$</span> <span class="w">ob-sync</span>
+<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.3.0</span>
+<span class="d">  ------------------------------------------</span>
+  <span class="g">1)</span> Sync      <span class="d">backup + rebase + push</span>
+  <span class="g">7)</span> Repair    <span class="d">rebuild git metadata</span>   <span class="y">← now honest</span>
+  <span class="g">18)</span> Init     <span class="d">new vault / first-time setup</span> <span class="g">← new</span>
+  <span class="g">…</span>
+<span class="d">  Select an option [0-18]:</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <p class="eyebrow">Why ob-sync</p>
+      <h2>Serious sync, zero ceremony</h2>
+      <p class="sub">Everything a phone-first vault needs to survive reality: shared-storage quirks, dead .git directories, conflicts from a second device, and 2 a.m. panic restores.</p>
+      <div class="grid g3">
+        <div class="card"><span class="ico">⚡</span><h3>One-command sync</h3><p><code>sync</code> = pre-sync backup + commit + fetch + rebase + push, with a clear <code>[ OK ]</code> line for every step. Nothing hidden, nothing silent.</p></div>
+        <div class="card"><span class="ico">🛡️</span><h3>Nine layers of defense</h3><p>Repo-state guards, lock files, checksummed tar backups, fsck health checks, unborn-HEAD handling — every operation is fenced.</p></div>
+        <div class="card"><span class="ico">🩺</span><h3>Honest repair <span class="tag">new in 9.3</span></h3><p>When <code>repair</code> fails, ob-sync now prints the <em>real</em> error instead of a bare FAIL — and on FUSE/sdcardfs filesystems it falls back to a copy-based install automatically.</p></div>
+        <div class="card"><span class="ico">🚀</span><h3>Init wizard <span class="tag">new in 9.3</span></h3><p>Brand-new vault? Menu option <code>18) Init</code> asks for your repo URL and does <code>git init</code> + remote wiring + first sync — no terminal gymnastics.</p></div>
+        <div class="card"><span class="ico">🌙</span><h3>Cron-ready &amp; quiet</h3><p>Schedule automatic syncs from the menu, get JSON output for scripts, and let the watchdog skip credential prompts when nobody is watching.</p></div>
+        <div class="card"><span class="ico">🌍</span><h3>Trilingual + 330 tests</h3><p>CLI, docs and this site in English, فارسی and Español. Every release is guarded by 330 automated tests before it ships.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <p class="eyebrow">Quick start</p>
+      <h2>Up and running in 3 steps</h2>
+      <p class="sub">Works on Android (Termux), Linux and macOS. You only need a GitHub repo (private is fine) and 2 minutes.</p>
+      <div class="grid g2">
+        <div class="plat">
+          <h3>📱 Android — Termux</h3>
+          <div class="step"><b>1</b><p>Install <b>Termux from F-Droid</b> (not Play Store), then install curl:</p></div>
+          <div class="codeblk"><button class="copy" type="button">copy</button><pre>pkg install curl</pre></div>
+          <div class="step" style="margin-top:14px"><b>2</b><p>Run the installer:</p></div>
+          <div class="codeblk"><button class="copy" type="button">copy</button><pre>curl -fsSL https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/mobile/install.sh | bash</pre></div>
+          <div class="step" style="margin-top:14px"><b>3</b><p>Verify, connect your vault, open the menu:</p></div>
+          <div class="codeblk"><button class="copy" type="button">copy</button><pre>ob-sync doctor     # 1. verify the environment
+ob-sync init       # 2. asks for your GitHub repo URL
+ob-sync            # 3. interactive menu — or 18) Init</pre></div>
+        </div>
+        <div class="plat">
+          <h3>🖥️ Linux &amp; macOS</h3>
+          <div class="step"><b>1</b><p>Clone the repository:</p></div>
+          <div class="codeblk"><button class="copy" type="button">copy</button><pre>git clone https://github.com/CheginiSoroush/obsidian-sync-scripts.git
+cd obsidian-sync-scripts</pre></div>
+          <div class="step" style="margin-top:14px"><b>2</b><p>Run the desktop installer:</p></div>
+          <div class="codeblk"><button class="copy" type="button">copy</button><pre>./desktop/install.sh</pre></div>
+          <div class="step" style="margin-top:14px"><b>3</b><p>Init and sync:</p></div>
+          <div class="codeblk"><button class="copy" type="button">copy</button><pre>ob-sync init &amp;&amp; ob-sync sync</pre></div>
+          <div class="note"><b>Blind pipes:</b> piping installers into <code style="font-family:var(--mono)">bash</code> is convenient but blind. Prefer to inspect first? Read <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts/blob/main/mobile/install.sh">mobile/install.sh</a> or use the <code style="font-family:var(--mono)">git clone</code> method.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="proof">
+    <div class="wrap">
+      <p class="eyebrow">What it looks like</p>
+      <h2>Real output, not a mockup</h2>
+      <p class="sub">A genuine captured run of <code style="font-family:var(--mono);color:var(--cyn)">ob-sync sync</code> integrating two remote commits.</p>
+      <div class="term">
+        <div class="tbar"><i></i><i></i><i></i></div>
+<pre><span class="d">$</span> <span class="w">ob-sync sync</span>
+
+  Full Synchronization
+  ────────────────────────────────────────────────────────
+  [1] Checking repository state
+  <span class="g">[ OK ]</span> Repository is in a safe state
+  [2] Creating pre-sync backup
+  <span class="g">[ OK ]</span> Backup: pre-sync-20250612-143207.tar.gz
+  [3] Committing local changes
+  <span class="g">[ OK ]</span> Committed 3 changed file(s)
+  [4] Fetching remote state
+  [5] Rebasing onto origin/main (2 remote commit(s))
+  <span class="g">[ OK ]</span> Integrated 2 remote commit(s)
+  [6] Pushing to origin/main
+  <span class="g">[ OK ]</span> Pushed 1 commit(s)
+
+  <span class="g">[ OK ]</span> Sync complete — 2 commit(s) in, 1 commit(s) out</pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="menu">
+    <div class="wrap">
+      <p class="eyebrow">The interactive menu</p>
+      <h2>Everything lives behind one number</h2>
+      <p class="sub">Run <code style="font-family:var(--mono);color:var(--cyn)">ob-sync</code> with no arguments. 18 actions, plain-English labels, no flags to memorize.</p>
+      <div class="mgrid">
+        <div class="mi"><span class="n">1)</span><span class="t">Sync</span><small>backup + rebase + push</small></div>
+        <div class="mi"><span class="n">2)</span><span class="t">Pull</span><small>integrate remote changes</small></div>
+        <div class="mi"><span class="n">3)</span><span class="t">Push</span><small>publish local changes</small></div>
+        <div class="mi"><span class="n">4)</span><span class="t">Backup</span><small>create a verified backup</small></div>
+        <div class="mi"><span class="n">5)</span><span class="t">Restore</span><small>roll back from a backup</small></div>
+        <div class="mi"><span class="n">6)</span><span class="t">Verify</span><small>check backup integrity</small></div>
+        <div class="mi hot"><span class="n">7)</span><span class="t">Repair</span><small>rebuild git metadata</small><span class="new">honest</span></div>
+        <div class="mi"><span class="n">8)</span><span class="t">Organize</span><small>audit notes &amp; attachments</small></div>
+        <div class="mi"><span class="n">9)</span><span class="t">Status</span><small>vault overview</small></div>
+        <div class="mi"><span class="n">10)</span><span class="t">Health</span><small>git integrity check</small></div>
+        <div class="mi"><span class="n">11)</span><span class="t">Doctor</span><small>diagnose environment</small></div>
+        <div class="mi"><span class="n">12)</span><span class="t">Quick</span><small>backup + sync, one shot</small></div>
+        <div class="mi"><span class="n">13)</span><span class="t">Diff</span><small>pending changes</small></div>
+        <div class="mi"><span class="n">14)</span><span class="t">Config</span><small>effective settings</small></div>
+        <div class="mi"><span class="n">15)</span><span class="t">Remote</span><small>show or set the remote</small></div>
+        <div class="mi"><span class="n">16)</span><span class="t">Cron</span><small>schedule automatic syncs</small></div>
+        <div class="mi"><span class="n">17)</span><span class="t">EditConf</span><small>edit the config file</small></div>
+        <div class="mi hot"><span class="n">18)</span><span class="t">Init</span><small>new vault / first-time setup</small><span class="new">new</span></div>
+        <div class="mi"><span class="n">0)</span><span class="t">Exit</span><small>quit the tool</small></div>
+      </div>
+      <img class="menuimg" src="menu.svg" alt="Rendered screenshot of the ob-sync interactive menu showing all 18 options" loading="lazy">
+      <p class="cap">The actual TUI, rendered from the shipped source.</p>
+    </div>
+  </section>
+
+  <section id="v93">
+    <div class="wrap">
+      <p class="eyebrow">Latest release</p>
+      <h2>What v9.3.0 changed</h2>
+      <p class="sub">Field reports from real Termux phones drove both features.</p>
+      <div class="grid g2">
+        <div class="card"><span class="ico">🩺</span><h3>Repair that tells the truth</h3><p>On Android shared storage (FUSE/sdcardfs) a damaged <code>.git</code> used to die at the atomic swap with a silent <code>[FAIL]</code>. Now: the <em>actual</em> <code>mv</code> error is printed, and when the filesystem can't do atomic renames of directories, ob-sync switches to a copy-based install automatically — with a timestamped pre-repair backup taken either way.</p></div>
+        <div class="card"><span class="ico">🚀</span><h3>Init joins the menu</h3><p>First-time setup is no longer CLI-only. Menu option <code>18) Init</code> keeps or changes the vault path, asks for the new remote URL, then runs <code>git init</code> with additive history alignment — or clones a fresh vault when the directory is empty. The same battle-tested flow, now where phone users actually live.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="wrap">
+      <p class="eyebrow">FAQ</p>
+      <h2>Questions people actually ask</h2>
+      <p class="sub">Still stuck? The <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts/blob/main/docs/TROUBLESHOOTING.md">troubleshooting guide</a> and <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts/issues">issue tracker</a> are one click away.</p>
+      <details><summary>Is my data safe? What if something goes wrong?</summary><div class="a">Every risky operation takes a timestamped, checksummed <code>tar.gz</code> backup first, and <code>restore</code> only rolls back from verified backups. Sync pushes are additive — ob-sync never rewrites published history with force.</div></details>
+      <details><summary>Does it ever force-push or lose my commits?</summary><div class="a">No. Remote integration uses <code>git rebase</code> onto <code>origin/main</code>, so both devices' work survives. Conflicts are surfaced with clear guidance, never buried.</div></details>
+      <details><summary>Repair failed on my phone with [FAIL] — what now?</summary><div class="a">Upgrade first (<code>curl -fsSL https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/mobile/install.sh | bash</code>). v9.3.0 prints the real underlying error and, on FUSE/sdcardfs filesystems where directory renames fail, falls back to a copy-based install automatically.</div></details>
+      <details><summary>How do I connect a brand-new vault?</summary><div class="a">Open the menu (<code>ob-sync</code>) and pick <code>18) Init</code>. Confirm the vault path, paste your new GitHub repo URL, and ob-sync initializes git, wires the remote and performs the first sync. Empty directory? It clones. Existing notes? It adopts them.</div></details>
+      <details><summary>Does it need root or Obsidian plugins?</summary><div class="a">No root, no plugins, no daemon. Just Termux (F-Droid build) with git — the installer checks the environment for you via <code>ob-sync doctor</code>.</div></details>
+      <details><summary>Which platforms are supported?</summary><div class="a">Android via Termux, plus native Linux and macOS. Requires Bash 4+. The same script drives all three — <code>mobile/install.sh</code> for Termux, <code>desktop/install.sh</code> elsewhere.</div></details>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="ctaband">
+        <h2>Found it useful?</h2>
+        <p>A ⭐ on GitHub takes two seconds and genuinely helps other Obsidian users find ob-sync.</p>
+        <a class="btn p" href="https://github.com/CheginiSoroush/obsidian-sync-scripts/stargazers">★ Star the repository</a>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<!-- ══════════════ فارسی ══════════════ -->
+<div id="lang-fa" lang="fa" dir="rtl" hidden>
+
+  <div class="wrap">
+    <div class="hero">
+      <div class="kicker">
+        <span class="chip c">نسخهٔ ۹.۳.۰</span><span class="chip g">✔ ۳۳۰ تست سبز</span><span class="chip">مجوز MIT</span><span class="chip y">اندروید · لینوکس · مک</span>
+      </div>
+      <h1>والت شما. هر دستگاه. <span class="hl">همیشه همگام.</span></h1>
+      <p class="lead">ob-sync همگام‌سازی حرفه‌ای Obsidian ↔ Git در قالب یک اسکریپت bash است — بدون daemon، بدون افزونه، بدون وابستگی اضافه. بکاپ checksum‌دار قبل از هر عملیات پرخطر، حالت تعمیری که دربارهٔ خطا صادق است، و ویزارد منویی که والت تازه را در چند ثانیه وصل می‌کند.</p>
+      <div class="ctas">
+        <a class="btn p" href="#install-fa">شروع کنید ←</a>
+        <a class="btn s" href="https://github.com/CheginiSoroush/obsidian-sync-scripts">دیدن در گیت‌هاب&nbsp;↗</a>
+      </div>
+      <div class="term" role="img" aria-label="پیش‌نمایش منوی تعاملی ob-sync">
+        <div class="tbar"><i></i><i></i><i></i></div>
+<pre><span class="d">$</span> <span class="w">ob-sync</span>
+<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.3.0</span>
+<span class="d">  ------------------------------------------</span>
+  <span class="g">1)</span> Sync      <span class="d">backup + rebase + push</span>
+  <span class="g">7)</span> Repair    <span class="d">rebuild git metadata</span>   <span class="y">← now honest</span>
+  <span class="g">18)</span> Init     <span class="d">new vault / first-time setup</span> <span class="g">← new</span>
+  <span class="g">…</span>
+<span class="d">  Select an option [0-18]:</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <section id="features-fa">
+    <div class="wrap">
+      <p class="eyebrow">چرا ob-sync</p>
+      <h2>همگام‌سازی جدی، بدون تشریفات</h2>
+      <p class="sub">هر چیزی که والتِ گوشی‌محور برای بقا در دنیای واقعی لازم دارد: عجیب‌وغریب‌های حافظهٔ مشترک، پوشهٔ .git خراب، تعارض بین دو دستگاه، و بازگردانی اضطراری نیمه‌شب.</p>
+      <div class="grid g3">
+        <div class="card"><span class="ico">⚡</span><h3>همگام‌سازی با یک دستور</h3><p><code>sync</code> یعنی بکاپ پیش از sync + commit + fetch + rebase + push، با یک خط <code>[ OK ]</code> شفاف برای هر مرحله. هیچ‌چیز پنهان، هیچ‌چیز بی‌صدا.</p></div>
+        <div class="card"><span class="ico">🛡️</span><h3>نُه لایه دفاع</h3><p>محافظ وضعیت مخزن، فایل قفل، بکاپ‌های tar با checksum، بررسی سلامت با fsck، مدیریت unborn-HEAD — هر عملیات حصارکشی‌شده است.</p></div>
+        <div class="card"><span class="ico">🩺</span><h3>تعمیر صادقانه <span class="tag">جدید در ۹.۳</span></h3><p>وقتی <code>repair</code> شکست می‌خورد، ob-sync حالا <em>خطای واقعی</em> را چاپ می‌کند نه یک FAIL خشک‌وشین — و روی فایل‌سیستم‌های FUSE/sdcardfs خودکار به نصب کپی‌محور برمی‌گردد.</p></div>
+        <div class="card"><span class="ico">🚀</span><h3>ویزارد Init <span class="tag">جدید در ۹.۳</span></h3><p>والت تازه دارید؟ گزینهٔ <code>18) Init</code> منو، URL مخزن را می‌پرسد و <code>git init</code> + اتصال ریموت + اولین sync را انجام می‌دهد — بدون معجون‌گیری ترمینالی.</p></div>
+        <div class="card"><span class="ico">🌙</span><h3>آمادهٔ cron و بی‌سروصدا</h3><p>همگام‌سازی خودکار را از منو زمان‌بندی کنید، برای اسکریپت‌ها خروجی JSON بگیرید، و بگذارید watchdog هنگام نبودِ کاربر از پرامپت‌های رمز عبور بپرد.</p></div>
+        <div class="card"><span class="ico">🌍</span><h3>سه‌زبانه + ۳۳۰ تست</h3><p>رابط، مستندات و این سایت به انگلیسی، فارسی و اسپانیایی. هر انتشار پیش از عرضه با ۳۳۰ تست خودکار محافظت می‌شود.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install-fa">
+    <div class="wrap">
+      <p class="eyebrow">شروع سریع</p>
+      <h2>در ۳ قدم راه می‌افتد</h2>
+      <p class="sub">روی اندروید (Termux)، لینوکس و مک کار می‌کند. فقط به یک مخزن گیت‌هاب (خصوصی هم اشکال ندارد) و ۲ دقیقه وقت نیاز دارید.</p>
+      <div class="grid g2">
+        <div class="plat">
+          <h3>📱 اندروید — Termux</h3>
+          <div class="step"><b>۱</b><p><b>Termux را از F-Droid</b> نصب کنید (نه Play Store)، بعد curl را نصب کنید:</p></div>
+          <div class="codeblk"><button class="copy" type="button">کپی</button><pre>pkg install curl</pre></div>
+          <div class="step" style="margin-top:14px"><b>۲</b><p>نصب‌کننده را اجرا کنید:</p></div>
+          <div class="codeblk"><button class="copy" type="button">کپی</button><pre>curl -fsSL https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/mobile/install.sh | bash</pre></div>
+          <div class="step" style="margin-top:14px"><b>۳</b><p>بررسی، اتصال والت، باز کردن منو:</p></div>
+          <div class="codeblk"><button class="copy" type="button">کپی</button><pre>ob-sync doctor     # ۱. بررسی محیط
+ob-sync init       # ۲. URL مخزن گیت‌هاب را می‌پرسد
+ob-sync            # ۳. منوی تعاملی — یا 18) Init</pre></div>
+        </div>
+        <div class="plat">
+          <h3>🖥️ لینوکس و مک</h3>
+          <div class="step"><b>۱</b><p>مخزن را کلون کنید:</p></div>
+          <div class="codeblk"><button class="copy" type="button">کپی</button><pre>git clone https://github.com/CheginiSoroush/obsidian-sync-scripts.git
+cd obsidian-sync-scripts</pre></div>
+          <div class="step" style="margin-top:14px"><b>۲</b><p>نصب‌کنندهٔ دسکتاپ را اجرا کنید:</p></div>
+          <div class="codeblk"><button class="copy" type="button">کپی</button><pre>./desktop/install.sh</pre></div>
+          <div class="step" style="margin-top:14px"><b>۳</b><p>راه‌اندازی و همگام‌سازی:</p></div>
+          <div class="codeblk"><button class="copy" type="button">کپی</button><pre>ob-sync init &amp;&amp; ob-sync sync</pre></div>
+          <div class="note"><b>لولهٔ کور:</b> فرستادن نصب‌کننده با curl مستقیم به bash راحت است اما کور. ترجیح می‌دهید اول ببینید؟ <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts/blob/main/mobile/install.sh">mobile/install.sh</a> را بخوانید یا از روش <code style="font-family:var(--mono)">git clone</code> استفاده کنید.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="proof-fa">
+    <div class="wrap">
+      <p class="eyebrow">شکلِ کار</p>
+      <h2>خروجی واقعی، نه ماکت</h2>
+      <p class="sub">یک اجرای واقعیِ ضبط‌شده از <code style="font-family:var(--mono);color:var(--cyn)">ob-sync sync</code> که دو کامیت ریموت را یکپارچه می‌کند.</p>
+      <div class="term">
+        <div class="tbar"><i></i><i></i><i></i></div>
+<pre><span class="d">$</span> <span class="w">ob-sync sync</span>
+
+  Full Synchronization
+  ────────────────────────────────────────────────────────
+  [1] Checking repository state
+  <span class="g">[ OK ]</span> Repository is in a safe state
+  [2] Creating pre-sync backup
+  <span class="g">[ OK ]</span> Backup: pre-sync-20250612-143207.tar.gz
+  [3] Committing local changes
+  <span class="g">[ OK ]</span> Committed 3 changed file(s)
+  [4] Fetching remote state
+  [5] Rebasing onto origin/main (2 remote commit(s))
+  <span class="g">[ OK ]</span> Integrated 2 remote commit(s)
+  [6] Pushing to origin/main
+  <span class="g">[ OK ]</span> Pushed 1 commit(s)
+
+  <span class="g">[ OK ]</span> Sync complete — 2 commit(s) in, 1 commit(s) out</pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="menu-fa">
+    <div class="wrap">
+      <p class="eyebrow">منوی تعاملی</p>
+      <h2>همه‌چیز پشت یک عدد</h2>
+      <p class="sub">فقط <code style="font-family:var(--mono);color:var(--cyn)">ob-sync</code> را اجرا کنید. ۱۸ عملیات، برچسب‌های ساده، بدون فلگ‌هایی که باید حفظ کنید.</p>
+      <div class="mgrid">
+        <div class="mi"><span class="n">1)</span><span class="t">همگام‌سازی</span><small>بکاپ + rebase + push</small></div>
+        <div class="mi"><span class="n">2)</span><span class="t">دریافت</span><small>یکپارچه‌سازی تغییرات ریموت</small></div>
+        <div class="mi"><span class="n">3)</span><span class="t">انتشار</span><small>ارسال تغییرات محلی</small></div>
+        <div class="mi"><span class="n">4)</span><span class="t">پشتیبان</span><small>ساخت بکاپ راستی‌آزمایی‌شده</small></div>
+        <div class="mi"><span class="n">5)</span><span class="t">بازگردانی</span><small>برگشت از یک بکاپ</small></div>
+        <div class="mi"><span class="n">6)</span><span class="t">راستی‌آزمایی</span><small>بررسی سلامت بکاپ‌ها</small></div>
+        <div class="mi hot"><span class="n">7)</span><span class="t">تعمیر</span><small>بازسازی متادیتای git</small><span class="new">صادق</span></div>
+        <div class="mi"><span class="n">8)</span><span class="t">سازمان‌دهی</span><small>ممیزی یادداشت‌ها و پیوست‌ها</small></div>
+        <div class="mi"><span class="n">9)</span><span class="t">وضعیت</span><small>نمای کلی والت</small></div>
+        <div class="mi"><span class="n">10)</span><span class="t">سلامت</span><small>بررسی صحت git</small></div>
+        <div class="mi"><span class="n">11)</span><span class="t">پزشک</span><small>تشخیص مشکلات محیط</small></div>
+        <div class="mi"><span class="n">12)</span><span class="t">سریع</span><small>بکاپ + sync، یک‌ضرب</small></div>
+        <div class="mi"><span class="n">13)</span><span class="t">تغییرات</span><small>تغییرات در انتظار</small></div>
+        <div class="mi"><span class="n">14)</span><span class="t">پیکربندی</span><small>تنظیمات مؤثر</small></div>
+        <div class="mi"><span class="n">15)</span><span class="t">ریموت</span><small>نمایش یا تنظیم مخزن دور</small></div>
+        <div class="mi"><span class="n">16)</span><span class="t">زمان‌بندی</span><small>همگام‌سازی خودکار زمان‌دار</small></div>
+        <div class="mi"><span class="n">17)</span><span class="t">ویرایش پیکربندی</span><small>ویرایش فایل config</small></div>
+        <div class="mi hot"><span class="n">18)</span><span class="t">راه‌اندازی</span><small>والت تازه / راه‌اندازی اول</small><span class="new">تازه</span></div>
+        <div class="mi"><span class="n">0)</span><span class="t">خروج</span><small>بستن ابزار</small></div>
+      </div>
+      <img class="menuimg" src="menu.svg" alt="اسکرین‌شات رندرشدهٔ منوی تعاملی ob-sync با هر ۱۸ گزینه" loading="lazy">
+      <p class="cap">خودِ TUI، رندرشده از سورسِ منتشرشده.</p>
+    </div>
+  </section>
+
+  <section id="v93-fa">
+    <div class="wrap">
+      <p class="eyebrow">آخرین انتشار</p>
+      <h2>نسخهٔ ۹.۳.۰ چه چیزهایی عوض کرد</h2>
+      <p class="sub">هر دو قابلیت از گزارش‌های میدانیِ گوشی‌های واقعی Termux آمد.</p>
+      <div class="grid g2">
+        <div class="card"><span class="ico">🩺</span><h3>تعمیری که حقیقت را می‌گوید</h3><p>روی حافظهٔ مشترک اندروید (FUSE/sdcardfs) پوشهٔ <code>.git</code>ِ خراب سابقاً سرِ تعویض اتمی می‌مرد و فقط یک <code>[FAIL]</code> بی‌صدا می‌داد. حالا: خطای <em>واقعیِ</em> <code>mv</code> چاپ می‌شود و وقتی فایل‌سیستم نتواند دایرکتوری‌ها را اتمی جابه‌جا کند، ob-sync خودکار به نصب کپی‌محور سوئیچ می‌کند — در هر دو حالت با بکاپ پیش از تعمیر و مهر زمانی.</p></div>
+        <div class="card"><span class="ico">🚀</span><h3>Init به منو آمد</h3><p>راه‌اندازی اول دیگر فقط CLI نیست. گزینهٔ <code>18) Init</code> مسیر والت را تأیید یا تغییر می‌دهد، URL ریموت تازه را می‌پرسد، و <code>git init</code> با هم‌ترازی افزودنیِ تاریخچه اجرا می‌کند — یا اگر پوشه خالی باشد والت تازه را کلون می‌کند. همان جریانِ جنگ‌آزموده، حالا جایی که کاربر گوشی واقعاً زندگی می‌کند.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq-fa">
+    <div class="wrap">
+      <p class="eyebrow">سوالات متداول</p>
+      <h2>سوال‌هایی که واقعاً پرسیده می‌شود</h2>
+      <p class="sub">هنوز گیر کردید؟ <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts/blob/main/docs/TROUBLESHOOTING.md">راهنمای عیب‌یابی</a> و <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts/issues">باگ‌ترکر</a> یک کلیک فاصله دارند.</p>
+      <details><summary>امنیت داده‌هایم چطور است؟ اگر مشکلی پیش بیاید؟</summary><div class="a">هر عملیات پرخطر اول یک بکاپ <code>tar.gz</code> با مهر زمانی و checksum می‌سازد، و <code>restore</code> فقط از بکاپ‌های راستی‌آزمایی‌شده برمی‌گردد. pushها افزودنی‌اند — ob-sync هرگز با force تاریخچهٔ منتشرشده را بازنویسی نمی‌کند.</div></details>
+      <details><summary>آیا force-push می‌کند یا کامیت‌هایم را گم می‌کند؟</summary><div class="a">نه. یکپارچه‌سازی ریموت با <code>git rebase</code> روی <code>origin/main</code> است، پس کار هر دو دستگاه زنده می‌ماند. تعارض‌ها با راهنمای شفاف رو می‌شوند، هرگز دفن نمی‌شوند.</div></details>
+      <details><summary>repair روی گوشی‌ام با [FAIL] شکست خورد — حالا چه؟</summary><div class="a">اول ارتقا دهید (<code>curl -fsSL https://raw.githubusercontent.com/CheginiSoroush/obsidian-sync-scripts/main/mobile/install.sh | bash</code>). نسخهٔ ۹.۳.۰ خطای واقعی زیرین را چاپ می‌کند و روی فایل‌سیستم‌های FUSE/sdcardfs که rename دایرکتوری در آن‌ها شکست می‌خورد، خودکار به نصب کپی‌محور برمی‌گردد.</div></details>
+      <details><summary>یک والت کاملاً تازه دارم؛ چطوری وصلش کنم؟</summary><div class="a">منو را باز کنید (<code>ob-sync</code>) و <code>18) Init</code> را بزنید. مسیر والت را تأیید کنید، URL مخزن تازهٔ گیت‌هاب را بچسبانید؛ ob-sync گیت را راه می‌اندازد، ریموت را وصل می‌کند و اولین sync را انجام می‌دهد. پوشه خالی؟ کلون می‌کند. یادداشت موجود؟ به فرزندی می‌گیرد.</div></details>
+      <details><summary>ریشه (root) یا افزونهٔ Obsidian می‌خواهد؟</summary><div class="a">نه root، نه افزونه، نه daemon. فقط Termux (نسخهٔ F-Droid) با git — نصب‌کننده با <code>ob-sync doctor</code> محیط را برایتان بررسی می‌کند.</div></details>
+      <details><summary>روی چه پلتفرم‌هایی کار می‌کند؟</summary><div class="a">اندروید با Termux، به‌علاوهٔ لینوکس و مکِ بومی. فقط Bash 4+ لازم است. همان یک اسکریپت هر سه را می‌راند — <code>mobile/install.sh</code> برای Termux، <code>desktop/install.sh</code> برای بقیه.</div></details>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="ctaband">
+        <h2>به دردتان خورد؟</h2>
+        <p>یک ⭐ در گیت‌هاب فقط دو ثانیه طول می‌کشد و واقعاً کمک می‌کند کاربرهای دیگر Obsidian هم ob-sync را پیدا کنند.</p>
+        <a class="btn p" href="https://github.com/CheginiSoroush/obsidian-sync-scripts/stargazers">★ ستاره‌دار کردن مخزن</a>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>MIT © Soroush Chegini — ob-sync</span>
+    <span><a href="https://github.com/CheginiSoroush/obsidian-sync-scripts">GitHub</a> · <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts/blob/main/docs/TROUBLESHOOTING.md">Troubleshooting</a></span>
+    <span>Independent project · not affiliated with Obsidian.md</span>
+  </div>
+  <span class="safe" aria-hidden="true"></span>
+</footer>
+
+<script>
+(function(){
+  var en=document.getElementById('lang-en'),fa=document.getElementById('lang-fa'),
+      be=document.getElementById('btn-en'),bf=document.getElementById('btn-fa'),h=document.documentElement;
+  function setLang(l){
+    var isFa=l==='fa';
+    en.hidden=isFa;fa.hidden=!isFa;
+    be.classList.toggle('on',!isFa);bf.classList.toggle('on',isFa);
+    h.lang=isFa?'fa':'en';h.dir=isFa?'rtl':'ltr';
+    try{localStorage.setItem('ob-lang',l)}catch(e){}
+  }
+  window.setLang=setLang;
+  var saved=null;try{saved=localStorage.getItem('ob-lang')}catch(e){}
+  if(!saved&&String(navigator.language||'').toLowerCase().indexOf('fa')===0)saved='fa';
+  if(saved)window.setLang(saved);
+  document.querySelectorAll('.codeblk').forEach(function(b){
+    var btn=b.querySelector('.copy'),pre=b.querySelector('pre');
+    if(!btn||!pre)return;
+    btn.addEventListener('click',function(){
+      var t=pre.textContent;
+      function ok(){btn.textContent='✓';setTimeout(function(){btn.textContent=document.documentElement.lang==='fa'?'کپی':'copy'},1400)}
+      if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(ok,function(){})}
+      else{var ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');ok()}catch(e){}document.body.removeChild(ta)}
+    });
+  });
+})();
+</script>
+</body>
+</html>
