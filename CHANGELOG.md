@@ -4,6 +4,42 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.5.1] — The tool survives the user (user-error hardening)
+
+A dedicated user-error test suite (`tests/user-error-tests.sh`) now attacks
+ob-sync the way real users do — hand-edited configs, wrong editors, mistyped
+URLs, deleted folders. It found three gaps, all fixed here:
+
+### Fixed
+
+- **CRLF-edited config files no longer corrupt the remote** — a config or
+  identity card saved by a Windows/Android editor (CRLF endings) injected an
+  invisible `\r` into the remote URL: every fetch died on a phantom
+  `…git?` repository, and a corrupted card could re-corrupt a healed
+  `origin` on every run (the stuck state). Values are now parsed clean, and
+  an `origin` already carrying the CR is healed back from the card on the
+  next locked run.
+- **Quoted and whitespace-padded values parse clean** — `REMOTE="https://…"`
+  copy-pasted out of a tutorial no longer stores the literal quotes as part
+  of the URL.
+- **`OBS_CONFIG` pointing at a directory** (a `mkdir` typo) no longer spews
+  raw `read: read error: Is a directory` bash noise; non-regular config
+  files are simply treated as absent.
+- **Honest diagnosis for a vault with no `.git`** — `sync`/`quick` on a
+  vault whose `.git` was deleted (or never existed) now says
+  `No git repository found in: …` and points at `repair` (which rebuilds
+  the metadata from the vault's own identity card) or `init`, instead of
+  the misleading `Repository is not in a safe state`.
+
+### Added
+
+- **`tests/user-error-tests.sh`** — a second, self-contained suite that
+  simulates the user-error zoo (CRLF/quoted/garbage config files, config
+  paths pointing at directories, vanished vaults, `.ob-sync` replaced by a
+  file, typo'd remotes, hijacked `origin`, deleted `.git`, double launches)
+  and asserts the contract: never lose data, never borrow another vault's
+  remote, always fail honestly. Run both suites before every release.
+
 ## [9.5.0] — The vault carries its own identity card
 
 Proposal-turned-feature from the same field report that produced 9.4.2:

@@ -19,6 +19,48 @@ which diagnoses the repository.
 | `Remote default branch is 'master'` | `export OBS_BRANCH=master`, or rename the remote branch |
 | `sync --json` output is empty or not parseable | stdout always carries the document — check stderr for the human error; see [Machine-readable modes](#machine-readable-modes---json) |
 | Another ob-sync instance is running (rc 2) | wait for it to finish; JSON modes still answer with a parseable `lock_busy` document |
+| `fatal: '…' does not appear to be a git repository` (URL ends in a stray `?` or odd char) | The config was edited with Windows/Android CRLF endings — v9.5.1+ parses values clean and self-heals `origin` from the identity card on the next sync. Older versions: strip the CRs (see [Hand-edited config files](#hand-edited-config-files)) |
+| `No git repository found in: …` | `.git` is missing (deleted, or the folder was never a repo). `ob-sync repair` rebuilds it from the vault's own remote — your notes are never touched; `ob-sync init` starts fresh instead |
+| raw `read: read error: Is a directory` noise | `OBS_CONFIG` (or its default path) points at a directory, not a file — v9.5.1+ treats it as absent; fix the path |
+
+## The two config files
+
+ob-sync splits configuration by ownership — device stuff stays on the
+device, vault stuff travels with the vault:
+
+| File | Describes | Contents | Committed to git? |
+| --- | --- | --- | --- |
+| `~/.config/ob-sync/config` | **this device** | pinned vault (`VAULT`), last-synced remote, branch | never — it stays on the machine |
+| `<vault>/.ob-sync/config` (9.5.0+) | **the vault** | `REMOTE`, `BRANCH` — two keys, nothing else | yes — every clone arrives pre-configured |
+
+Resolution order when several sources disagree: `OBS_REMOTE` env → the
+vault's own `origin` → the vault's identity card → the machine config
+(only for its own pinned vault). A vault with none of these refuses
+honestly — nothing is ever guessed. Neither file ever contains
+credentials; those belong to git's credential helper (see
+[Authentication](#authentication)).
+
+## Hand-edited config files
+
+Hand-edited files are a fact of life, and since v9.5.1 the parser cleans
+up after the three most common accidents: Windows/Android **CRLF line
+endings** (an invisible `\r` inside the remote URL used to kill every
+fetch with `…git?` — and could re-corrupt a healed `origin` on every
+run), values **wrapped in quotes** (`REMOTE="https://…"`), and stray
+**outer whitespace**. All three now parse clean, and a card that
+contradicts a corrupted `origin` heals it back on the next sync.
+
+On older versions, or to fix a file by hand:
+
+```bash
+sed -i 's/\r$//' ~/.config/ob-sync/config <vault>/.ob-sync/config
+ob-sync sync          # origin re-aligns with the identity card
+```
+
+A typo'd remote inside the identity card is an honest failure: the sync
+stops with git's own error, the local commit and the pre-sync backup
+survive, and `ob-sync remote <correct-url>` rewrites both `origin` and
+the card in lockstep.
 
 ## The lock
 

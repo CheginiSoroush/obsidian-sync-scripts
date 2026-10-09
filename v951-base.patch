@@ -1,0 +1,883 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index a49e2c7..2363233 100755
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,42 @@ All notable changes to this project are documented in this file.
+ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+ and versioning follows [Semantic Versioning](https://semver.org/).
+ 
++## [9.5.1] — The tool survives the user (user-error hardening)
++
++A dedicated user-error test suite (`tests/user-error-tests.sh`) now attacks
++ob-sync the way real users do — hand-edited configs, wrong editors, mistyped
++URLs, deleted folders. It found three gaps, all fixed here:
++
++### Fixed
++
++- **CRLF-edited config files no longer corrupt the remote** — a config or
++  identity card saved by a Windows/Android editor (CRLF endings) injected an
++  invisible `\r` into the remote URL: every fetch died on a phantom
++  `…git?` repository, and a corrupted card could re-corrupt a healed
++  `origin` on every run (the stuck state). Values are now parsed clean, and
++  an `origin` already carrying the CR is healed back from the card on the
++  next locked run.
++- **Quoted and whitespace-padded values parse clean** — `REMOTE="https://…"`
++  copy-pasted out of a tutorial no longer stores the literal quotes as part
++  of the URL.
++- **`OBS_CONFIG` pointing at a directory** (a `mkdir` typo) no longer spews
++  raw `read: read error: Is a directory` bash noise; non-regular config
++  files are simply treated as absent.
++- **Honest diagnosis for a vault with no `.git`** — `sync`/`quick` on a
++  vault whose `.git` was deleted (or never existed) now says
++  `No git repository found in: …` and points at `repair` (which rebuilds
++  the metadata from the vault's own identity card) or `init`, instead of
++  the misleading `Repository is not in a safe state`.
++
++### Added
++
++- **`tests/user-error-tests.sh`** — a second, self-contained suite that
++  simulates the user-error zoo (CRLF/quoted/garbage config files, config
++  paths pointing at directories, vanished vaults, `.ob-sync` replaced by a
++  file, typo'd remotes, hijacked `origin`, deleted `.git`, double launches)
++  and asserts the contract: never lose data, never borrow another vault's
++  remote, always fail honestly. Run both suites before every release.
++
+ ## [9.5.0] — The vault carries its own identity card
+ 
+ Proposal-turned-feature from the same field report that produced 9.4.2:
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index e19bd9a..14a5beb 100755
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -10,6 +10,7 @@ mobile/install.sh      Termux installer
+ desktop/install.sh     Linux / macOS installer
+ completions/           Bash & zsh tab-completion
+ tests/run-tests.sh     Functional test suite (self-contained sandbox)
++tests/user-error-tests.sh  User-error resilience suite (broken configs, deleted .git, …)
+ docs/                  Troubleshooting, deep-dive docs & TUI screenshot
+ .github/workflows/     CI (ShellCheck gate, test suite, markdownlint) + release automation
+ ```
+@@ -24,13 +25,14 @@ platform differences belong behind the portability helpers inside the script.
+ 
+    ```bash
+    shellcheck -x -S warning bin/ob-sync mobile/install.sh desktop/install.sh \
+-     completions/ob-sync.bash tests/run-tests.sh
++     completions/ob-sync.bash tests/run-tests.sh tests/user-error-tests.sh
+    ```
+ 
+-3. Run the functional test suite (self-contained, ~2s, no network):
++3. Run BOTH test suites (self-contained, no network):
+ 
+    ```bash
+-   bash tests/run-tests.sh    # currently 330 assertions, must all pass
++   bash tests/run-tests.sh            # 372 functional assertions, must all pass
++   bash tests/user-error-tests.sh     # 56 user-error resilience checks, must all pass
+    ```
+ 
+ 4. Smoke-test on a real device or machine:
+@@ -58,7 +60,7 @@ platform differences belong behind the portability helpers inside the script.
+ ## Pull request checklist
+ 
+ - [ ] `shellcheck -S warning` passes locally
+-- [ ] `bash tests/run-tests.sh` passes locally (exit code 0)
++- [ ] `bash tests/run-tests.sh` AND `bash tests/user-error-tests.sh` pass locally (exit code 0)
+ - [ ] Tested on Termux **or** desktop (ideally both, for platform-sensitive changes)
+ - [ ] Help text and docs updated if behavior changed
+ - [ ] Changelog entry added under the next version heading
+diff --git a/bin/ob-sync b/bin/ob-sync
+index 3538061..89cd176 100755
+--- a/bin/ob-sync
++++ b/bin/ob-sync
+@@ -387,7 +387,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+ #  2. CONFIGURATION (every value can be overridden via environment)
+ # ═════════════════════════════════════════════════════════════════════════════
+ 
+-readonly VERSION="9.5.0"
++readonly VERSION="9.5.1"
+ 
+ # ── Platform detection ──────────────────────────────────────────────────────
+ # Termux exports TERMUX_VERSION in every session; desktop shells never do.
+@@ -477,18 +477,45 @@ HAS_PGREP=0;   command -v pgrep   >/dev/null 2>&1 && HAS_PGREP=1
+ #   5. platform default       — last resort; doctor reports the source
+ VAULT_SOURCE="unresolved"
+ 
++##
++# Normalize a raw value read from a KEY=VALUE line. Hand-edited files are
++# a fact of life: Windows/Android editors leave CRLF endings behind, users
++# copy values wrapped in quotes out of tutorials, and stray outer spaces
++# sneak in. One layer of matched wrapping quotes, trailing CRs and outer
++# whitespace are stripped — what survives is the value ob-sync actually
++# uses (config_set never writes any of these, so nothing legitimate is
++# lost). Field-reported 9.5.0: a CRLF-edited identity card corrupted
++# 'origin' with an invisible CR and every fetch died on a phantom URL.
++##
++conf_value_clean() {
++    local val="$1"
++    val=${val%$'\r'}
++    # trim outer whitespace (the standard non-greedy trim idiom)
++    val=${val#"${val%%[![:space:]]*}"}
++    val=${val%"${val##*[![:space:]]}"}
++    if [[ ${#val} -ge 2 ]]; then
++        local q=${val:0:1}
++        if [[ ( "$q" == '"' || "$q" == "'" ) && "${val: -1}" == "$q" ]]; then
++            val=${val:1:${#val}-2}
++        fi
++    fi
++    printf '%s\n' "$val"
++}
++
+ ##
+ # Read a KEY=VALUE pair from the config file.
++# The file must be a REGULAR file — a directory (a mkdir typo) or a FIFO
++# would otherwise fail noisily or block on open (read error spam, 9.5.0).
+ # @param $1 key
+ # @stdout value when present; @return 1 when file or key is absent
+ ##
+ config_get() {
+-    [[ -r "$CONFIG_FILE" ]] || return 1
++    [[ -r "$CONFIG_FILE" && -f "$CONFIG_FILE" ]] || return 1
+     local key="$1" line
+     while IFS= read -r line; do
+         case "$line" in
+             ''|'#'*) continue ;;
+-            "$key="*) printf '%s\n' "${line#"$key="}"; return 0 ;;
++            "$key="*) conf_value_clean "${line#"$key="}"; return 0 ;;
+         esac
+     done < "$CONFIG_FILE"
+     return 1
+@@ -748,12 +775,12 @@ vault_conf_path() {
+ vault_conf_get() {
+     local f
+     f=$(vault_conf_path)
+-    [[ -r "$f" ]] || return 1
++    [[ -r "$f" && -f "$f" ]] || return 1
+     local key="$1" line
+     while IFS= read -r line; do
+         case "$line" in
+             ''|'#'*) continue ;;
+-            "$key="*) printf '%s\n' "${line#"$key="}"; return 0 ;;
++            "$key="*) conf_value_clean "${line#"$key="}"; return 0 ;;
+         esac
+     done < "$f"
+     return 1
+@@ -1957,6 +1984,19 @@ clean_repair_artifacts() {
+ ##
+ ensure_safe() {
+     clean_repair_artifacts
++    if [[ ! -d "$VAULT/.git" ]]; then
++        # A vault with no .git is not an "unsafe repository" — there is no
++        # repository here at all. Diagnose it honestly (the generic
++        # not-in-a-safe-state message misled users into thinking their
++        # data was the problem) and point at the two real roads back:
++        # repair rebuilds metadata from the vault's own remote — possible
++        # precisely because the identity card carries it — init starts
++        # from scratch.
++        error "No git repository found in: $VAULT"
++        error "Run: ob-sync repair  (rebuilds metadata from the vault's remote)"
++        error "      — or: ob-sync init  (start a fresh repository)"
++        return 1
++    fi
+     check_repo_safe && return 0
+ 
+     warn "Repository is not in a safe state"
+diff --git a/docs/TROUBLESHOOTING.md b/docs/TROUBLESHOOTING.md
+index abccd0d..faebfb4 100755
+--- a/docs/TROUBLESHOOTING.md
++++ b/docs/TROUBLESHOOTING.md
+@@ -19,6 +19,48 @@ which diagnoses the repository.
+ | `Remote default branch is 'master'` | `export OBS_BRANCH=master`, or rename the remote branch |
+ | `sync --json` output is empty or not parseable | stdout always carries the document — check stderr for the human error; see [Machine-readable modes](#machine-readable-modes---json) |
+ | Another ob-sync instance is running (rc 2) | wait for it to finish; JSON modes still answer with a parseable `lock_busy` document |
++| `fatal: '…' does not appear to be a git repository` (URL ends in a stray `?` or odd char) | The config was edited with Windows/Android CRLF endings — v9.5.1+ parses values clean and self-heals `origin` from the identity card on the next sync. Older versions: strip the CRs (see [Hand-edited config files](#hand-edited-config-files)) |
++| `No git repository found in: …` | `.git` is missing (deleted, or the folder was never a repo). `ob-sync repair` rebuilds it from the vault's own remote — your notes are never touched; `ob-sync init` starts fresh instead |
++| raw `read: read error: Is a directory` noise | `OBS_CONFIG` (or its default path) points at a directory, not a file — v9.5.1+ treats it as absent; fix the path |
++
++## The two config files
++
++ob-sync splits configuration by ownership — device stuff stays on the
++device, vault stuff travels with the vault:
++
++| File | Describes | Contents | Committed to git? |
++| --- | --- | --- | --- |
++| `~/.config/ob-sync/config` | **this device** | pinned vault (`VAULT`), last-synced remote, branch | never — it stays on the machine |
++| `<vault>/.ob-sync/config` (9.5.0+) | **the vault** | `REMOTE`, `BRANCH` — two keys, nothing else | yes — every clone arrives pre-configured |
++
++Resolution order when several sources disagree: `OBS_REMOTE` env → the
++vault's own `origin` → the vault's identity card → the machine config
++(only for its own pinned vault). A vault with none of these refuses
++honestly — nothing is ever guessed. Neither file ever contains
++credentials; those belong to git's credential helper (see
++[Authentication](#authentication)).
++
++## Hand-edited config files
++
++Hand-edited files are a fact of life, and since v9.5.1 the parser cleans
++up after the three most common accidents: Windows/Android **CRLF line
++endings** (an invisible `\r` inside the remote URL used to kill every
++fetch with `…git?` — and could re-corrupt a healed `origin` on every
++run), values **wrapped in quotes** (`REMOTE="https://…"`), and stray
++**outer whitespace**. All three now parse clean, and a card that
++contradicts a corrupted `origin` heals it back on the next sync.
++
++On older versions, or to fix a file by hand:
++
++```bash
++sed -i 's/\r$//' ~/.config/ob-sync/config <vault>/.ob-sync/config
++ob-sync sync          # origin re-aligns with the identity card
++```
++
++A typo'd remote inside the identity card is an honest failure: the sync
++stops with git's own error, the local commit and the pre-sync backup
++survive, and `ob-sync remote <correct-url>` rewrites both `origin` and
++the card in lockstep.
+ 
+ ## The lock
+ 
+diff --git a/docs/index.html b/docs/index.html
+index f469e17..216a83b 100644
+--- a/docs/index.html
++++ b/docs/index.html
+@@ -4,27 +4,27 @@
+ <meta charset="utf-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+ <title>ob-sync — Obsidian ↔ Git sync for Termux, Linux &amp; macOS</title>
+-<meta name="description" content="ob-sync: enterprise-grade Obsidian ↔ Git sync from your phone or desktop. One bash script, zero dependencies, 330 tests, honest repair, and a menu-driven Init wizard. Trilingual docs: English, فارسی, Español.">
++<meta name="description" content="ob-sync: enterprise-grade Obsidian ↔ Git sync from your phone or desktop. One bash script, zero dependencies, 428 tests, a vault identity card that makes clones self-configuring, honest repair, and a menu-driven Init wizard. Trilingual docs: English, فارسی, Español.">
+ <link rel="canonical" href="https://cheginisoroush.github.io/obsidian-sync-scripts/">
+ <meta name="theme-color" content="#0d1117">
+ <meta property="og:type" content="website">
+ <meta property="og:site_name" content="ob-sync">
+ <meta property="og:title" content="ob-sync — Obsidian ↔ Git sync for Termux, Linux &amp; macOS">
+-<meta property="og:description" content="One bash script. Three platforms. Nine layers of defense. 330 tests. Honest repair + Init wizard in v9.3.0.">
++<meta property="og:description" content="One bash script. Three platforms. Nine layers of defense. 428 tests. Your vault carries its own identity card.">
+ <meta property="og:url" content="https://cheginisoroush.github.io/obsidian-sync-scripts/">
+ <meta property="og:image" content="https://cheginisoroush.github.io/obsidian-sync-scripts/assets/social-banner.png">
+ <meta property="og:image:width" content="1280">
+ <meta property="og:image:height" content="640">
+ <meta name="twitter:card" content="summary_large_image">
+ <meta name="twitter:title" content="ob-sync — Obsidian ↔ Git sync for Termux, Linux &amp; macOS">
+-<meta name="twitter:description" content="One bash script. Three platforms. Nine layers of defense. 330 tests. Honest repair + Init wizard in v9.3.0.">
++<meta name="twitter:description" content="One bash script. Three platforms. Nine layers of defense. 428 tests. Your vault carries its own identity card.">
+ <meta name="twitter:image" content="https://cheginisoroush.github.io/obsidian-sync-scripts/assets/social-banner.png">
+ <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1117'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='%2300C896' font-family='monospace'%3E%E2%86%94%3C/text%3E%3C/svg%3E">
+ <link rel="preconnect" href="https://fonts.googleapis.com">
+ <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+ <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;800&display=swap" rel="stylesheet">
+ <script type="application/ld+json">
+-{"@context":"https://schema.org","@type":"SoftwareApplication","name":"ob-sync","operatingSystem":"Android, Linux, macOS","applicationCategory":"DeveloperApplication","softwareVersion":"9.3.0","license":"https://opensource.org/licenses/MIT","description":"Enterprise-grade Obsidian ↔ Git sync: one bash script for Termux, Linux and macOS. Backups, honest repair, Init wizard, 330 tests.","url":"https://cheginisoroush.github.io/obsidian-sync-scripts/","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
++{"@context":"https://schema.org","@type":"SoftwareApplication","name":"ob-sync","operatingSystem":"Android, Linux, macOS","applicationCategory":"DeveloperApplication","softwareVersion":"9.5.1","license":"https://opensource.org/licenses/MIT","description":"Enterprise-grade Obsidian ↔ Git sync: one bash script for Termux, Linux and macOS. Backups, honest repair, Init wizard, 428 tests.","url":"https://cheginisoroush.github.io/obsidian-sync-scripts/","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+ </script>
+ <style>
+ :root{
+@@ -110,6 +110,9 @@ h2{font-size:clamp(1.5rem,3vw,2.1rem);font-weight:800;margin-bottom:10px}
+ .step p{color:var(--dim);font-size:.92rem}
+ .codeblk{position:relative;background:var(--bg);border:1px solid var(--line);border-radius:9px;margin-top:8px}
+ .codeblk pre{padding:14px 44px 14px 16px;font-family:var(--mono);font-size:.83rem;overflow-x:auto;direction:ltr;text-align:left;color:#d2e3d5}
++/* RTL: the copy button sits at the inline-end = LEFT side — mirror the
++   padding so long first lines clear the button instead of sliding under it */
++html[lang="fa"] .codeblk pre{padding:14px 16px 14px 60px}
+ .copy{position:absolute;top:8px;inset-inline-end:8px;background:var(--bg3);border:1px solid var(--line);color:var(--dim);border-radius:6px;padding:4px 9px;font-size:.72rem;cursor:pointer;font-family:var(--mono)}
+ .copy:hover{color:var(--grn);border-color:var(--grn)}
+ .note{margin-top:14px;border-inline-start:3px solid var(--ylw);background:rgba(227,179,65,.07);padding:12px 16px;border-radius:0 8px 8px 0;font-size:.88rem;color:var(--dim)}
+@@ -154,7 +157,7 @@ footer a:hover{color:var(--grn)}
+   <div class="wrap">
+     <a class="brand" href="#top">ob<b>↔</b>sync</a>
+     <nav class="navlinks" aria-label="Sections">
+-      <a href="#features">Features</a><a href="#install">Install</a><a href="#menu">Menu</a><a href="#faq">FAQ</a>
++      <a href="#features">Features</a><a href="#install">Install</a><a href="#menu">Menu</a><a href="#identity">Config</a><a href="#faq">FAQ</a>
+       <a href="https://github.com/CheginiSoroush/obsidian-sync-scripts" aria-label="GitHub repository">GitHub&nbsp;↗</a>
+       <div class="langbtns" role="group" aria-label="Language">
+         <button type="button" id="btn-en" class="on" onclick="setLang('en')">EN</button>
+@@ -172,7 +175,7 @@ footer a:hover{color:var(--grn)}
+   <div class="wrap">
+     <div class="hero">
+       <div class="kicker">
+-        <span class="chip c">v9.3.0</span><span class="chip g">✔ 330 tests passing</span><span class="chip">MIT license</span><span class="chip y">Android · Linux · macOS</span>
++        <span class="chip c">v9.5.1</span><span class="chip g">✔ 428 tests passing</span><span class="chip">MIT license</span><span class="chip y">Android · Linux · macOS</span>
+       </div>
+       <h1>Your vault. Every device. <span class="hl">Always in sync.</span></h1>
+       <p class="lead">ob-sync is enterprise-grade Obsidian ↔ Git sync in a single bash script — no daemons, no plugins, no extra dependencies. Checksummed backups before every risky move, a repair mode that tells the truth about failures, and a menu wizard that connects a brand-new vault in seconds.</p>
+@@ -183,13 +186,14 @@ footer a:hover{color:var(--grn)}
+       <div class="term" role="img" aria-label="ob-sync interactive menu preview">
+         <div class="tbar"><i></i><i></i><i></i></div>
+ <pre><span class="d">$</span> <span class="w">ob-sync</span>
+-<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.3.0</span>
++<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.5.1</span>
+ <span class="d">  ------------------------------------------</span>
+   <span class="g">1)</span> Sync      <span class="d">backup + rebase + push</span>
+   <span class="g">7)</span> Repair    <span class="d">rebuild git metadata</span>   <span class="y">← now honest</span>
+-  <span class="g">18)</span> Init     <span class="d">new vault / first-time setup</span> <span class="g">← new</span>
++  <span class="g">18)</span> Init     <span class="d">new vault / first-time setup</span>
++  <span class="g">19)</span> Switch  <span class="d">change the vault for this session</span> <span class="g">← new</span>
+   <span class="g">…</span>
+-<span class="d">  Select an option [0-18]:</span></pre>
++<span class="d">  Select an option [0-19]:</span></pre>
+       </div>
+     </div>
+   </div>
+@@ -205,7 +209,7 @@ footer a:hover{color:var(--grn)}
+         <div class="card"><span class="ico">🩺</span><h3>Honest repair <span class="tag">new in 9.3</span></h3><p>When <code>repair</code> fails, ob-sync now prints the <em>real</em> error instead of a bare FAIL — and on FUSE/sdcardfs filesystems it falls back to a copy-based install automatically.</p></div>
+         <div class="card"><span class="ico">🚀</span><h3>Init wizard <span class="tag">new in 9.3</span></h3><p>Brand-new vault? Menu option <code>18) Init</code> asks for your repo URL and does <code>git init</code> + remote wiring + first sync — no terminal gymnastics.</p></div>
+         <div class="card"><span class="ico">🌙</span><h3>Cron-ready &amp; quiet</h3><p>Schedule automatic syncs from the menu, get JSON output for scripts, and let the watchdog skip credential prompts when nobody is watching.</p></div>
+-        <div class="card"><span class="ico">🌍</span><h3>Trilingual + 330 tests</h3><p>CLI, docs and this site in English, فارسی and Español. Every release is guarded by 330 automated tests before it ships.</p></div>
++        <div class="card"><span class="ico">🌍</span><h3>Trilingual + 428 tests</h3><p>CLI, docs and this site in English, فارسی and Español. Every release is guarded by 428 automated tests — plus a dedicated user-error suite — before it ships.</p></div>
+       </div>
+     </div>
+   </section>
+@@ -274,7 +278,7 @@ cd obsidian-sync-scripts</pre></div>
+     <div class="wrap">
+       <p class="eyebrow">The interactive menu</p>
+       <h2>Everything lives behind one number</h2>
+-      <p class="sub">Run <code style="font-family:var(--mono);color:var(--cyn)">ob-sync</code> with no arguments. 18 actions, plain-English labels, no flags to memorize.</p>
++      <p class="sub">Run <code style="font-family:var(--mono);color:var(--cyn)">ob-sync</code> with no arguments. 19 actions, plain-English labels, no flags to memorize.</p>
+       <div class="mgrid">
+         <div class="mi"><span class="n">1)</span><span class="t">Sync</span><small>backup + rebase + push</small></div>
+         <div class="mi"><span class="n">2)</span><span class="t">Pull</span><small>integrate remote changes</small></div>
+@@ -294,25 +298,56 @@ cd obsidian-sync-scripts</pre></div>
+         <div class="mi"><span class="n">16)</span><span class="t">Cron</span><small>schedule automatic syncs</small></div>
+         <div class="mi"><span class="n">17)</span><span class="t">EditConf</span><small>edit the config file</small></div>
+         <div class="mi hot"><span class="n">18)</span><span class="t">Init</span><small>new vault / first-time setup</small><span class="new">new</span></div>
++        <div class="mi hot"><span class="n">19)</span><span class="t">Switch</span><small>use a different vault this session</small><span class="new">new</span></div>
+         <div class="mi"><span class="n">0)</span><span class="t">Exit</span><small>quit the tool</small></div>
+       </div>
+-      <img class="menuimg" src="menu.svg" alt="Rendered screenshot of the ob-sync interactive menu showing all 18 options" loading="lazy">
+-      <p class="cap">The actual TUI, rendered from the shipped source.</p>
++      <img class="menuimg" src="menu.svg" alt="Rendered screenshot of the ob-sync interactive menu showing all 19 options" loading="lazy">
++      <p class="cap">The actual TUI, rendered from the shipped source at v9.3.0 — 19) Switch joined in v9.4.0.</p>
+     </div>
+   </section>
+ 
+   <section id="v93">
+     <div class="wrap">
+-      <p class="eyebrow">Latest release</p>
+-      <h2>What v9.3.0 changed</h2>
+-      <p class="sub">Field reports from real Termux phones drove both features.</p>
++      <p class="eyebrow">Recent releases</p>
++      <h2>What's new since v9.3.0</h2>
++      <p class="sub">Every one of these started as a field report from a real device.</p>
+       <div class="grid g2">
+-        <div class="card"><span class="ico">🩺</span><h3>Repair that tells the truth</h3><p>On Android shared storage (FUSE/sdcardfs) a damaged <code>.git</code> used to die at the atomic swap with a silent <code>[FAIL]</code>. Now: the <em>actual</em> <code>mv</code> error is printed, and when the filesystem can't do atomic renames of directories, ob-sync switches to a copy-based install automatically — with a timestamped pre-repair backup taken either way.</p></div>
+-        <div class="card"><span class="ico">🚀</span><h3>Init joins the menu</h3><p>First-time setup is no longer CLI-only. Menu option <code>18) Init</code> keeps or changes the vault path, asks for the new remote URL, then runs <code>git init</code> with additive history alignment — or clones a fresh vault when the directory is empty. The same battle-tested flow, now where phone users actually live.</p></div>
++        <div class="card"><span class="ico">🔄</span><h3>Session vault switching <span class="tag">9.4.0</span></h3><p>One machine, many vaults: menu <code>19) Switch</code> moves the session to any discovered vault without rewriting the config, and <code>init</code> sets up git's credential helper once — so Termux stops asking for your password on every sync.</p></div>
++        <div class="card"><span class="ico">📺</span><h3>Prompts you can actually see <span class="tag">9.4.1</span></h3><p>Credential prompts no longer vanish into swallowed stderr (the “Termux hang”): interactive output streams through, machine modes print <code>git said:</code> on failure, and a stall guard cuts a dead transfer in about a minute.</p></div>
++        <div class="card"><span class="ico">🪪</span><h3>The vault identity card <span class="tag">9.5.0</span></h3><p><code>&lt;vault&gt;/.ob-sync/config</code> stores the vault's <code>REMOTE</code> and <code>BRANCH</code> inside the vault and is committed with it. A clone on a new device is ready to run; a lost <code>origin</code> is restored from the vault's own file — never from another vault's settings.</p></div>
++        <div class="card"><span class="ico">🧗</span><h3>Survives the user <span class="tag">9.5.1</span></h3><p>A dedicated user-error suite (56 checks) attacks the tool with CRLF-edited configs, quoted values, typo'd remotes and deleted <code>.git</code> folders. The gaps it found are fixed: hand-edited values parse clean, and a missing <code>.git</code> now gets an honest diagnosis plus a repair hint.</p></div>
+       </div>
+     </div>
+   </section>
+ 
++  <section id="identity">
++    <div class="wrap">
++      <p class="eyebrow">Configuration</p>
++      <h2>Two config layers — and your vault carries its own</h2>
++      <p class="sub">ob-sync keeps device stuff on the device and vault stuff inside the vault. That split is what makes multi-device sync boring — in the best possible way.</p>
++      <div class="grid g2">
++        <div class="plat">
++          <h3>🖥️ Device config — <code style="font-family:var(--mono)">~/.config/ob-sync/config</code></h3>
++          <p>Describes <b>this device</b>: which vault is pinned, where backups live, branch overrides. Written by <code style="font-family:var(--mono)">ob-sync init</code>, editable via menu <code style="font-family:var(--mono)">17) EditConf</code> — and it never leaves the machine. Environment variables (<code>OBS_VAULT</code>, <code>OBS_REMOTE</code>, …) always outrank it.</p>
++        </div>
++        <div class="plat">
++          <h3>🪪 Vault identity card — <code style="font-family:var(--mono)">&lt;vault&gt;/.ob-sync/config</code> <span class="tag">new in 9.5</span></h3>
++          <p>Describes <b>the vault</b>: its <code>REMOTE</code> and <code>BRANCH</code> — two keys, nothing else. Written by <code>init</code> / <code>remote</code>, committed with the vault, and re-aligned with <code>origin</code> on every locked run: the card wins over a stale origin.</p>
++        </div>
++      </div>
++      <div class="grid g2" style="margin-top:18px">
++        <div class="codeblk"><button class="copy" type="button">copy</button><pre># .ob-sync/config — committed with the vault
++REMOTE=git@github.com:you/MyVault.git
++BRANCH=main</pre></div>
++        <div class="codeblk"><button class="copy" type="button">copy</button><pre>git clone git@github.com:you/MyVault.git
++ob-sync init      # adopts the clone — remote already known
++ob-sync sync      # green on the first run</pre></div>
++      </div>
++      <p class="sub" style="margin-top:18px">When several sources disagree, the order is fixed: <code>OBS_REMOTE</code> → the vault's <code>origin</code> → the identity card → the device config (only for its own pinned vault). A vault with none of these refuses honestly and <code>init</code> asks — nothing is ever guessed. Even a deleted <code>.git</code> is recoverable: <code>ob-sync repair</code> rebuilds the metadata from the card's remote.</p>
++      <div class="note"><b>🔐 No tokens, ever.</b> Neither file stores credentials — only URLs and branch names. Log in once with git's credential helper (<code style="font-family:var(--mono)">git config --global credential.helper store</code> or <code style="font-family:var(--mono)">gh auth login</code>) and every device, cron job and widget reuses it. An automated test asserts the card stays credential-free.</div>
++    </div>
++  </section>
++
+   <section id="faq">
+     <div class="wrap">
+       <p class="eyebrow">FAQ</p>
+@@ -324,6 +359,8 @@ cd obsidian-sync-scripts</pre></div>
+       <details><summary>How do I connect a brand-new vault?</summary><div class="a">Open the menu (<code>ob-sync</code>) and pick <code>18) Init</code>. Confirm the vault path, paste your new GitHub repo URL, and ob-sync initializes git, wires the remote and performs the first sync. Empty directory? It clones. Existing notes? It adopts them.</div></details>
+       <details><summary>Does it need root or Obsidian plugins?</summary><div class="a">No root, no plugins, no daemon. Just Termux (F-Droid build) with git — the installer checks the environment for you via <code>ob-sync doctor</code>.</div></details>
+       <details><summary>Which platforms are supported?</summary><div class="a">Android via Termux, plus native Linux and macOS. Requires Bash 4+. The same script drives all three — <code>mobile/install.sh</code> for Termux, <code>desktop/install.sh</code> elsewhere.</div></details>
++      <details><summary>I cloned my vault to a new device — will it just work?</summary><div class="a">Yes — since v9.5.0 the vault carries its identity in <code>.ob-sync/config</code>: the remote URL and branch travel inside the repository itself. Run <code>ob-sync init</code> once (it adopts the clone), then <code>ob-sync sync</code> — no remote questions asked. And if <code>.git</code> is ever lost, <code>ob-sync repair</code> rebuilds it from the card's remote.</div></details>
++      <details><summary>Where are my settings stored — is my token in there?</summary><div class="a">Two places, and neither holds secrets: the device config (<code>~/.config/ob-sync/config</code> — pinned vault, backups) stays on the machine, and the vault identity card (<code>.ob-sync/config</code> — remote URL + branch) is committed with the vault so clones self-configure. Credentials belong to git's credential helper; an automated test guarantees the card never contains tokens or passwords.</div></details>
+     </div>
+   </section>
+ 
+@@ -345,7 +382,7 @@ cd obsidian-sync-scripts</pre></div>
+   <div class="wrap">
+     <div class="hero">
+       <div class="kicker">
+-        <span class="chip c">نسخهٔ ۹.۳.۰</span><span class="chip g">✔ ۳۳۰ تست سبز</span><span class="chip">مجوز MIT</span><span class="chip y">اندروید · لینوکس · مک</span>
++        <span class="chip c">نسخهٔ ۹.۵.۱</span><span class="chip g">✔ ۴۲۸ تست سبز</span><span class="chip">مجوز MIT</span><span class="chip y">اندروید · لینوکس · مک</span>
+       </div>
+       <h1>والت شما. هر دستگاه. <span class="hl">همیشه همگام.</span></h1>
+       <p class="lead">ob-sync همگام‌سازی حرفه‌ای Obsidian ↔ Git در قالب یک اسکریپت bash است — بدون daemon، بدون افزونه، بدون وابستگی اضافه. بکاپ checksum‌دار قبل از هر عملیات پرخطر، حالت تعمیری که دربارهٔ خطا صادق است، و ویزارد منویی که والت تازه را در چند ثانیه وصل می‌کند.</p>
+@@ -356,13 +393,14 @@ cd obsidian-sync-scripts</pre></div>
+       <div class="term" role="img" aria-label="پیش‌نمایش منوی تعاملی ob-sync">
+         <div class="tbar"><i></i><i></i><i></i></div>
+ <pre><span class="d">$</span> <span class="w">ob-sync</span>
+-<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.3.0</span>
++<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.5.1</span>
+ <span class="d">  ------------------------------------------</span>
+   <span class="g">1)</span> Sync      <span class="d">backup + rebase + push</span>
+   <span class="g">7)</span> Repair    <span class="d">rebuild git metadata</span>   <span class="y">← now honest</span>
+-  <span class="g">18)</span> Init     <span class="d">new vault / first-time setup</span> <span class="g">← new</span>
++  <span class="g">18)</span> Init     <span class="d">new vault / first-time setup</span>
++  <span class="g">19)</span> Switch  <span class="d">change the vault for this session</span> <span class="g">← new</span>
+   <span class="g">…</span>
+-<span class="d">  Select an option [0-18]:</span></pre>
++<span class="d">  Select an option [0-19]:</span></pre>
+       </div>
+     </div>
+   </div>
+@@ -378,7 +416,7 @@ cd obsidian-sync-scripts</pre></div>
+         <div class="card"><span class="ico">🩺</span><h3>تعمیر صادقانه <span class="tag">جدید در ۹.۳</span></h3><p>وقتی <code>repair</code> شکست می‌خورد، ob-sync حالا <em>خطای واقعی</em> را چاپ می‌کند نه یک FAIL خشک‌وشین — و روی فایل‌سیستم‌های FUSE/sdcardfs خودکار به نصب کپی‌محور برمی‌گردد.</p></div>
+         <div class="card"><span class="ico">🚀</span><h3>ویزارد Init <span class="tag">جدید در ۹.۳</span></h3><p>والت تازه دارید؟ گزینهٔ <code>18) Init</code> منو، URL مخزن را می‌پرسد و <code>git init</code> + اتصال ریموت + اولین sync را انجام می‌دهد — بدون معجون‌گیری ترمینالی.</p></div>
+         <div class="card"><span class="ico">🌙</span><h3>آمادهٔ cron و بی‌سروصدا</h3><p>همگام‌سازی خودکار را از منو زمان‌بندی کنید، برای اسکریپت‌ها خروجی JSON بگیرید، و بگذارید watchdog هنگام نبودِ کاربر از پرامپت‌های رمز عبور بپرد.</p></div>
+-        <div class="card"><span class="ico">🌍</span><h3>سه‌زبانه + ۳۳۰ تست</h3><p>رابط، مستندات و این سایت به انگلیسی، فارسی و اسپانیایی. هر انتشار پیش از عرضه با ۳۳۰ تست خودکار محافظت می‌شود.</p></div>
++        <div class="card"><span class="ico">🌍</span><h3>سه‌زبانه + ۴۲۸ تست</h3><p>رابط، مستندات و این سایت به انگلیسی، فارسی و اسپانیایی. هر انتشار پیش از عرضه با ۴۲۸ تست خودکار — به‌علاوهٔ یک مجموعه‌تست اختصاصیِ خطاهای کاربری — محافظت می‌شود.</p></div>
+       </div>
+     </div>
+   </section>
+@@ -447,7 +485,7 @@ cd obsidian-sync-scripts</pre></div>
+     <div class="wrap">
+       <p class="eyebrow">منوی تعاملی</p>
+       <h2>همه‌چیز پشت یک عدد</h2>
+-      <p class="sub">فقط <code style="font-family:var(--mono);color:var(--cyn)">ob-sync</code> را اجرا کنید. ۱۸ عملیات، برچسب‌های ساده، بدون فلگ‌هایی که باید حفظ کنید.</p>
++      <p class="sub">فقط <code style="font-family:var(--mono);color:var(--cyn)">ob-sync</code> را اجرا کنید. ۱۹ عملیات، برچسب‌های ساده، بدون فلگ‌هایی که باید حفظ کنید.</p>
+       <div class="mgrid">
+         <div class="mi"><span class="n">1)</span><span class="t">همگام‌سازی</span><small>بکاپ + rebase + push</small></div>
+         <div class="mi"><span class="n">2)</span><span class="t">دریافت</span><small>یکپارچه‌سازی تغییرات ریموت</small></div>
+@@ -467,22 +505,53 @@ cd obsidian-sync-scripts</pre></div>
+         <div class="mi"><span class="n">16)</span><span class="t">زمان‌بندی</span><small>همگام‌سازی خودکار زمان‌دار</small></div>
+         <div class="mi"><span class="n">17)</span><span class="t">ویرایش پیکربندی</span><small>ویرایش فایل config</small></div>
+         <div class="mi hot"><span class="n">18)</span><span class="t">راه‌اندازی</span><small>والت تازه / راه‌اندازی اول</small><span class="new">تازه</span></div>
++        <div class="mi hot"><span class="n">19)</span><span class="t">تغییر والت</span><small>والتِ دیگری برای همین نشست</small><span class="new">تازه</span></div>
+         <div class="mi"><span class="n">0)</span><span class="t">خروج</span><small>بستن ابزار</small></div>
+       </div>
+-      <img class="menuimg" src="menu.svg" alt="اسکرین‌شات رندرشدهٔ منوی تعاملی ob-sync با هر ۱۸ گزینه" loading="lazy">
+-      <p class="cap">خودِ TUI، رندرشده از سورسِ منتشرشده.</p>
++      <img class="menuimg" src="menu.svg" alt="اسکرین‌شات رندرشدهٔ منوی تعاملی ob-sync با هر ۱۹ گزینه" loading="lazy">
++      <p class="cap">خودِ TUI، رندرشده از سورسِ منتشرشده در نسخهٔ ۹.۳.۰ — گزینهٔ ۱۹ (تغییر والت) در نسخهٔ ۹.۴.۰ اضافه شد.</p>
+     </div>
+   </section>
+ 
+   <section id="v93-fa">
+     <div class="wrap">
+-      <p class="eyebrow">آخرین انتشار</p>
+-      <h2>نسخهٔ ۹.۳.۰ چه چیزهایی عوض کرد</h2>
+-      <p class="sub">هر دو قابلیت از گزارش‌های میدانیِ گوشی‌های واقعی Termux آمد.</p>
++      <p class="eyebrow">انتشارهای اخیر</p>
++      <h2>از نسخهٔ ۹.۳.۰ به بعد چه چیزهایی عوض شد</h2>
++      <p class="sub">هرکدام از این‌ها از یک گزارش میدانیِ واقعی شروع شد.</p>
+       <div class="grid g2">
+-        <div class="card"><span class="ico">🩺</span><h3>تعمیری که حقیقت را می‌گوید</h3><p>روی حافظهٔ مشترک اندروید (FUSE/sdcardfs) پوشهٔ <code>.git</code>ِ خراب سابقاً سرِ تعویض اتمی می‌مرد و فقط یک <code>[FAIL]</code> بی‌صدا می‌داد. حالا: خطای <em>واقعیِ</em> <code>mv</code> چاپ می‌شود و وقتی فایل‌سیستم نتواند دایرکتوری‌ها را اتمی جابه‌جا کند، ob-sync خودکار به نصب کپی‌محور سوئیچ می‌کند — در هر دو حالت با بکاپ پیش از تعمیر و مهر زمانی.</p></div>
+-        <div class="card"><span class="ico">🚀</span><h3>Init به منو آمد</h3><p>راه‌اندازی اول دیگر فقط CLI نیست. گزینهٔ <code>18) Init</code> مسیر والت را تأیید یا تغییر می‌دهد، URL ریموت تازه را می‌پرسد، و <code>git init</code> با هم‌ترازی افزودنیِ تاریخچه اجرا می‌کند — یا اگر پوشه خالی باشد والت تازه را کلون می‌کند. همان جریانِ جنگ‌آزموده، حالا جایی که کاربر گوشی واقعاً زندگی می‌کند.</p></div>
++        <div class="card"><span class="ico">🔄</span><h3>تغییر والت در همان نشست <span class="tag">۹.۴.۰</span></h3><p>یک دستگاه، چند والت: گزینهٔ <code>19) Switch</code> منو، نشست را بدون بازنویسی config به هر والت کشف‌شده‌ای می‌برد، و <code>init</code> یک بار credential helper گیت را راه می‌اندازد — تا Termux دیگر هر بار رمز عبور نخواهد.</p></div>
++        <div class="card"><span class="ico">📺</span><h3>پرامپت‌هایی که واقعاً دیده می‌شوند <span class="tag">۹.۴.۱</span></h3><p>پرامپت رمز دیگر در stderr بلعیده‌شده گم نمی‌شود (همان «هنگِ Termux»): در اجرای تعاملی مستقیم نمایش داده می‌شود، حالت‌های ماشینی «git said:» را چاپ می‌کنند، و stall-guard انتقالِ مرده را در حدود یک دقیقه قطع می‌کند.</p></div>
++        <div class="card"><span class="ico">🪪</span><h3>کارت هویت والت <span class="tag">۹.۵.۰</span></h3><p><code>&lt;vault&gt;/.ob-sync/config</code> مقدار <code>REMOTE</code> و <code>BRANCH</code> والت را داخل خود والت نگه می‌دارد و همراهش کامیت می‌شود. کلون روی دستگاه تازه آمادهٔ اجراست؛ <code>origin</code>ِ گم‌شده از فایلِ خودِ والت بازسازی می‌شود — هرگز از تنظیمات والتِ دیگری.</p></div>
++        <div class="card"><span class="ico">🧗</span><h3>در برابر خطای کاربر مقاوم است <span class="tag">۹.۵.۱</span></h3><p>یک مجموعه‌تست اختصاصیِ خطاهای کاربری (۵۶ بررسی) با کانفیگ‌های CRLF‌دار، مقدارهای گیومه‌دار، ریموت اشتباه‌تایپ‌شده و پوشه‌های <code>.git</code> حذف‌شده به ابزار حمله می‌کند. شکاف‌هایی که پیدا شد رفع شده‌اند: مقدارهای دست‌نویس تمیز پارس می‌شوند و نبودِ <code>.git</code> حالا تشخیص صادقانه + راهنمای repair می‌گیرد.</p></div>
++      </div>
++    </div>
++  </section>
++
++  <section id="identity-fa">
++    <div class="wrap">
++      <p class="eyebrow">پیکربندی</p>
++      <h2>دو لایهٔ پیکربندی — والت شما هویت خودش را حمل می‌کند</h2>
++      <p class="sub">ob-sync چیزهای مربوط به دستگاه را روی دستگاه نگه می‌دارد و چیزهای مربوط به والت را داخل خود والت. همین تفکیک است که همگام‌سازی چنددستگاهی را بی‌دردسر می‌کند.</p>
++      <div class="grid g2">
++        <div class="plat">
++          <h3>🖥️ پیکربندی دستگاه — <code dir="ltr" style="font-family:var(--mono)">~/.config/ob-sync/config</code></h3>
++          <p>این <b>دستگاه</b> را توصیف می‌کند: کدام والت سنجاق شده، بکاپ‌ها کجا ذخیره شوند، شاخهٔ پیش‌فرض. با <code style="font-family:var(--mono)">ob-sync init</code> نوشته می‌شود، از منو با <code style="font-family:var(--mono)">17) EditConf</code> قابل ویرایش است — و هرگز از دستگاه خارج نمی‌شود. متغیرهای محیطی (<code>OBS_VAULT</code>، <code>OBS_REMOTE</code> و…) همیشه از آن بالاترند.</p>
++        </div>
++        <div class="plat">
++          <h3>🪪 کارت هویت والت — <code dir="ltr" style="font-family:var(--mono)">&lt;vault&gt;/.ob-sync/config</code> <span class="tag">تازه در ۹.۵</span></h3>
++          <p><b>خود والت</b> را توصیف می‌کند: <code>REMOTE</code> و <code>BRANCH</code> — فقط دو کلید، نه بیشتر. با <code>init</code> / <code>remote</code> نوشته می‌شود، همراه والت کامیت می‌شود و در هر اجرای قفل‌دار با <code>origin</code> هم‌تراز می‌شود: کارت از یک origin کهنه بالاتر است.</p>
++        </div>
++      </div>
++      <div class="grid g2" style="margin-top:18px">
++        <div class="codeblk"><button class="copy" type="button">کپی</button><pre dir="ltr"># .ob-sync/config — همراه والت کامیت می‌شود
++REMOTE=git@github.com:you/MyVault.git
++BRANCH=main</pre></div>
++        <div class="codeblk"><button class="copy" type="button">کپی</button><pre dir="ltr">git clone git@github.com:you/MyVault.git
++ob-sync init      # کلون را به فرزندی می‌گیرد — ریموت از قبل معلوم است
++ob-sync sync      # همان اجرای اول سبز است</pre></div>
+       </div>
++      <p class="sub" style="margin-top:18px">وقتی چند منبع با هم ناسازگارند، ترتیب ثابت است: <code>OBS_REMOTE</code> ← <code>origin</code> خود والت ← کارت هویت ← پیکربندی دستگاه (فقط برای والتِ سنجاق‌شدهٔ خودش). والتی که هیچ‌کدام را ندارد صادقانه رد می‌کند و <code>init</code> می‌پرسد — هیچ‌چیز حدس زده نمی‌شود. حتی <code>.git</code> حذف‌شده هم قابل بازیابی است: <code>ob-sync repair</code> متادیتا را از ریموتِ روی کارت بازسازی می‌کند.</p>
++      <div class="note"><b>🔐 هرگز توکنی در کار نیست.</b> هیچ‌کدام از این دو فایل رمز نگه نمی‌دارند — فقط URL و نام شاخه. یک بار با credential helper گیت وارد شوید (<code style="font-family:var(--mono)">git config --global credential.helper store</code> یا <code style="font-family:var(--mono)">gh auth login</code>) تا همهٔ دستگاه‌ها، cronها و ویجت‌ها از همان استفاده کنند. یک تست خودکار تضمین می‌کند کارت هرگز شامل توکن یا رمز نباشد.</div>
+     </div>
+   </section>
+ 
+@@ -497,6 +566,8 @@ cd obsidian-sync-scripts</pre></div>
+       <details><summary>یک والت کاملاً تازه دارم؛ چطوری وصلش کنم؟</summary><div class="a">منو را باز کنید (<code>ob-sync</code>) و <code>18) Init</code> را بزنید. مسیر والت را تأیید کنید، URL مخزن تازهٔ گیت‌هاب را بچسبانید؛ ob-sync گیت را راه می‌اندازد، ریموت را وصل می‌کند و اولین sync را انجام می‌دهد. پوشه خالی؟ کلون می‌کند. یادداشت موجود؟ به فرزندی می‌گیرد.</div></details>
+       <details><summary>ریشه (root) یا افزونهٔ Obsidian می‌خواهد؟</summary><div class="a">نه root، نه افزونه، نه daemon. فقط Termux (نسخهٔ F-Droid) با git — نصب‌کننده با <code>ob-sync doctor</code> محیط را برایتان بررسی می‌کند.</div></details>
+       <details><summary>روی چه پلتفرم‌هایی کار می‌کند؟</summary><div class="a">اندروید با Termux، به‌علاوهٔ لینوکس و مکِ بومی. فقط Bash 4+ لازم است. همان یک اسکریپت هر سه را می‌راند — <code>mobile/install.sh</code> برای Termux، <code>desktop/install.sh</code> برای بقیه.</div></details>
++      <details><summary>والتم را روی دستگاه تازه کلون کردم — همین‌طوری کار می‌کند؟</summary><div class="a">بله — از نسخهٔ ۹.۵.۰ والت هویتش را در <code>.ob-sync/config</code> حمل می‌کند: URL ریموت و شاخه داخل خود مخزن سفر می‌کنند. یک بار <code>ob-sync init</code> را اجرا کنید (کلون را به فرزندی می‌گیرد)، بعد <code>ob-sync sync</code> — هیچ سوالی دربارهٔ ریموت پرسیده نمی‌شود. و اگر روزی <code>.git</code> گم شد، <code>ob-sync repair</code> آن را از ریموتِ روی کارت بازسازی می‌کند.</div></details>
++      <details><summary>تنظیماتم کجا ذخیره می‌شوند — توکنم آنجاست؟</summary><div class="a">دو جا، و هیچ‌کدام رمز ندارد: پیکربندی دستگاه (<code>~/.config/ob-sync/config</code> — والت سنجاق‌شده، بکاپ‌ها) روی خود دستگاه می‌ماند، و کارت هویت والت (<code>.ob-sync/config</code> — URL ریموت + شاخه) همراه والت کامیت می‌شود تا کلون‌ها خودشان را پیکربندی کنند. رمزها جایشان credential helper خود گیت است؛ یک تست خودکار تضمین می‌کند کارت هرگز شامل توکن یا رمز عبور نباشد.</div></details>
+     </div>
+   </section>
+ 
+diff --git a/tests/user-error-tests.sh b/tests/user-error-tests.sh
+new file mode 100755
+index 0000000..35f6f45
+--- /dev/null
++++ b/tests/user-error-tests.sh
+@@ -0,0 +1,354 @@
++#!/usr/bin/env bash
++#
++# ─────────────────────────────────────────────────────────────────────────────
++#   ob-sync USER-ERROR resilience tests
++#
++#   The main suite (run-tests.sh) proves the designed paths. THIS suite
++#   attacks the tool the way real users do: hand-edited config files with
++#   Windows CRLF endings, values wrapped in quotes, garbage prose pasted
++#   into the config, mistyped remote URLs, config paths pointing at
++#   directories, deleted vault folders, .ob-sync replaced by a file,
++#   double launches. Field experience (9.4.1/9.4.2) says this is where
++#   the actual pain comes from.
++#
++#   The contract under user error:
++#     · vault data is never corrupted and never lost,
++#     · ob-sync never invents or borrows a remote that belongs to
++#       another vault,
++#     · every run either succeeds transparently, self-heals from a
++#       value that is still correct, or fails HONESTLY with an
++#       actionable message — never a hang, never raw bash noise.
++#
++#   Self-contained like run-tests.sh: throwaway sandbox, no network,
++#   no root required, no side effects on the host. Run BOTH suites
++#   before every release:
++#       bash tests/run-tests.sh && bash tests/user-error-tests.sh
++# ─────────────────────────────────────────────────────────────────────────────
++
++set -u
++
++ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
++OB="$ROOT/bin/ob-sync"
++
++SB="$(mktemp -d "${TMPDIR:-/tmp}/ob-sync-ue-tests-XXXXXX")" \
++    || { echo "FATAL: cannot create the sandbox directory"; exit 1; }
++trap 'rm -rf -- "$SB"' EXIT
++
++PASS=0
++FAIL=0
++
++# ── assertions ───────────────────────────────────────────────────────────────
++CAP="$SB/cap.txt"
++
++run() {  # run <name> <expected-rc> <command...> — captures output for expect_out
++    local name="$1" want="$2"; shift 2
++    "$@" >"$CAP" 2>&1
++    local got=$?
++    if [[ "$got" == "$want" ]]; then
++        PASS=$((PASS + 1)); printf '  [ OK ] %s\n' "$name"
++    else
++        FAIL=$((FAIL + 1)); printf '  [FAIL] %s (want rc=%s got rc=%s)\n' "$name" "$want" "$got"
++        tail -6 "$CAP" | sed 's/^/         /'
++    fi
++}
++assert() {  # assert <name> <command that must be true>
++    local name="$1"; shift
++    if "$@" >/dev/null 2>&1; then
++        PASS=$((PASS + 1)); printf '  [ OK ] %s\n' "$name"
++    else
++        FAIL=$((FAIL + 1)); printf '  [FAIL] %s\n' "$name"
++    fi
++}
++expect_out() {  # expect_out <name> <ERE> — greps the LAST captured output
++    local name="$1"
++    if grep -qE "$2" "$CAP" 2>/dev/null; then
++        PASS=$((PASS + 1)); printf '  [ OK ] %s\n' "$name"
++    else
++        FAIL=$((FAIL + 1)); printf '  [FAIL] %s (pattern not found)\n' "$name"
++        tail -8 "$CAP" | sed 's/^/         /'
++    fi
++}
++expect_no_out() {  # expect_no_out <name> <ERE> — pattern must NOT appear
++    local name="$1"
++    if ! grep -qE "$2" "$CAP" 2>/dev/null; then
++        PASS=$((PASS + 1)); printf '  [ OK ] %s\n' "$name"
++    else
++        FAIL=$((FAIL + 1)); printf '  [FAIL] %s (unwanted pattern found)\n' "$name"
++        grep -E "$2" "$CAP" | head -3 | sed 's/^/         /'
++    fi
++}
++
++# ── sandbox environment ──────────────────────────────────────────────────────
++chmod +x "$OB"
++mkdir -p "$SB/home" "$SB/tmp"
++export HOME="$SB/home"
++export TMPDIR="$SB/tmp"
++unset XDG_CONFIG_HOME
++export GIT_CONFIG_GLOBAL="$SB/home/.gitconfig"
++export OBS_BACKUP_DIR="$SB/backups"
++export OBS_LOG="$SB/ob.log"
++export OBS_GIT_TIMEOUT=30
++# NOTE: OBS_CONFIG / OBS_VAULT / OBS_REMOTE are deliberately NOT exported —
++# every scenario below passes its own broken values, exactly like a user
++# would. Nothing may leak between scenarios.
++LOCKDIR="$SB/tmp/obs-sync.lock"
++
++git config --global user.email test@example.com
++git config --global user.name "Test User"
++git config --global init.defaultBranch main
++
++bash -n "$OB" || { echo "FATAL: bin/ob-sync has a syntax error"; exit 1; }
++
++echo "== UE-A. machine config file (~/.config/ob-sync/config) under user error =="
++
++# A1 — garbage prose instead of KEY=VALUE lines: the tool must shrug it
++# off (unknown lines are ignored by the parser) and never leak bash noise.
++printf 'this is not a config\njust some notes REMOTE= oops\n###\n' > "$SB/cfg-garbage"
++run "A1 status tolerates garbage config" 0 \
++    env OBS_CONFIG="$SB/cfg-garbage" "$OB" status
++expect_no_out "A1 no bash parser noise" "read error|unbound|syntax error"
++
++# A2 — CRLF endings (the config was edited on Windows/Android): values
++# must parse clean, so the stored remote still works verbatim.
++git init -q --bare "$SB/ueA2.git"
++mkdir -p "$SB/ueA2-vault"
++printf '# crlf config vault\n' > "$SB/ueA2-vault/note.md"
++git -C "$SB/ueA2-vault" init -q
++git -C "$SB/ueA2-vault" add -A
++git -C "$SB/ueA2-vault" commit -qm "crlf config fixture"
++printf 'VAULT=%s\r\nREMOTE=%s\r\nBRANCH=main\r\n' "$SB/ueA2-vault" "$SB/ueA2.git" > "$SB/cfg-crlf"
++run "A2 sync works with CRLF machine config" 0 \
++    env OBS_CONFIG="$SB/cfg-crlf" OBS_VAULT= "$OB" sync -y
++assert "A2 origin parsed clean (no CR)" \
++    bash -c "[[ \"\$(git -C '$SB/ueA2-vault' remote get-url origin 2>/dev/null)\" == '$SB/ueA2.git' ]]"
++assert "A2 the CRLF-configured remote received the vault" \
++    bash -c "git -C '$SB/ueA2.git' ls-tree -r --name-only refs/heads/main 2>/dev/null | grep -qF 'note.md'"
++
++# A3 — values wrapped in quotes (copy-paste from a tutorial):
++git init -q --bare "$SB/ueA3.git"
++mkdir -p "$SB/ueA3-vault"
++printf '# quoted config vault\n' > "$SB/ueA3-vault/note.md"
++git -C "$SB/ueA3-vault" init -q
++git -C "$SB/ueA3-vault" add -A
++git -C "$SB/ueA3-vault" commit -qm "quoted config fixture"
++printf 'VAULT=%s\nREMOTE="%s"\nBRANCH=main\n' "$SB/ueA3-vault" "$SB/ueA3.git" > "$SB/cfg-quoted"
++run "A3 sync works with quoted config values" 0 \
++    env OBS_CONFIG="$SB/cfg-quoted" OBS_VAULT= "$OB" sync -y
++assert "A3 origin parsed without quotes" \
++    bash -c "[[ \"\$(git -C '$SB/ueA3-vault' remote get-url origin 2>/dev/null)\" == '$SB/ueA3.git' ]]"
++
++# A4 — duplicate keys: the FIRST occurrence wins, deterministically.
++git init -q --bare "$SB/ueA4a.git"
++git init -q --bare "$SB/ueA4b.git"
++mkdir -p "$SB/ueA4-vault"
++printf '# dup config vault\n' > "$SB/ueA4-vault/note.md"
++git -C "$SB/ueA4-vault" init -q
++git -C "$SB/ueA4-vault" add -A
++git -C "$SB/ueA4-vault" commit -qm "dup config fixture"
++printf 'VAULT=%s\nREMOTE=%s\nREMOTE=%s\n' "$SB/ueA4-vault" "$SB/ueA4a.git" "$SB/ueA4b.git" > "$SB/cfg-dup"
++run "A4 sync works with duplicate keys" 0 \
++    env OBS_CONFIG="$SB/cfg-dup" OBS_VAULT= "$OB" sync -y
++assert "A4 first key wins" \
++    bash -c "git -C '$SB/ueA4a.git' ls-tree -r --name-only refs/heads/main 2>/dev/null | grep -qF 'note.md'"
++assert "A4 second key never used" \
++    bash -c "! git -C '$SB/ueA4b.git' rev-parse refs/heads/main >/dev/null 2>&1"
++
++# A5/A6 — empty or missing config: the tool runs as if unconfigured.
++: > "$SB/cfg-empty"
++run "A5 status tolerates empty config" 0 env OBS_CONFIG="$SB/cfg-empty" "$OB" status
++run "A6 status tolerates missing config" 0 env OBS_CONFIG="$SB/cfg-absent" "$OB" status
++
++# A7 — OBS_CONFIG pointing at a DIRECTORY (a mkdir typo): status must not
++# spew raw "read error: Is a directory" bash noise.
++mkdir -p "$SB/cfg-is-a-dir"
++run "A7 status tolerates config-that-is-a-directory" 0 \
++    env OBS_CONFIG="$SB/cfg-is-a-dir" "$OB" status
++expect_no_out "A7 no raw 'Is a directory' noise" "read error|Is a directory"
++
++# A8 — config VAULT points at a deleted folder: warn + fall through to
++# normal resolution, never a crash.
++printf 'VAULT=%s\n' "$SB/vanished-vault" > "$SB/cfg-gone"
++run "A8 status warns about the vanished vault" 0 \
++    env OBS_CONFIG="$SB/cfg-gone" "$OB" status
++expect_out "A8 the warning is actionable" "no longer exists"
++
++echo "== UE-B. vault identity card (<vault>/.ob-sync/config) under user error =="
++
++# B1 — card edited with CRLF endings, origin intact: the clean parse must
++# keep origin untouched and the run green.
++git init -q --bare "$SB/ueB1.git"
++mkdir -p "$SB/ueB1-vault"
++printf '# b1\n' > "$SB/ueB1-vault/note.md"
++env OBS_REMOTE="$SB/ueB1.git" OBS_VAULT="$SB/ueB1-vault" "$OB" init -y >/dev/null 2>&1
++sed -i 's/$/\r/' "$SB/ueB1-vault/.ob-sync/config"
++run "B1 sync survives a CRLF identity card" 0 \
++    env OBS_VAULT="$SB/ueB1-vault" "$OB" sync -y
++assert "B1 origin stays clean" \
++    bash -c "[[ \"\$(git -C '$SB/ueB1-vault' remote get-url origin 2>/dev/null)\" == '$SB/ueB1.git' ]]"
++
++# B2 — the STUCK state: origin itself was already corrupted by the old
++# CRLF bug. The card (parsed clean now) must heal origin back.
++git -C "$SB/ueB1-vault" remote set-url origin "$(printf '%s\r' "$SB/ueB1.git")"
++run "B2 sync heals a CR-corrupted origin from the card" 0 \
++    env OBS_VAULT="$SB/ueB1-vault" "$OB" sync -y
++assert "B2 origin healed clean" \
++    bash -c "[[ \"\$(git -C '$SB/ueB1-vault' remote get-url origin 2>/dev/null)\" == '$SB/ueB1.git' ]]"
++
++# B3 — quoted REMOTE in the card: parsed clean, origin aligned.
++git init -q --bare "$SB/ueB3.git"
++mkdir -p "$SB/ueB3-vault"
++printf '# b3\n' > "$SB/ueB3-vault/note.md"
++env OBS_REMOTE="$SB/ueB3.git" OBS_VAULT="$SB/ueB3-vault" "$OB" init -y >/dev/null 2>&1
++printf 'REMOTE="%s"\nBRANCH=main\n' "$SB/ueB3.git" > "$SB/ueB3-vault/.ob-sync/config"
++run "B3 sync survives a quoted identity card" 0 \
++    env OBS_VAULT="$SB/ueB3-vault" "$OB" sync -y
++assert "B3 origin parsed without quotes" \
++    bash -c "[[ \"\$(git -C '$SB/ueB3-vault' remote get-url origin 2>/dev/null)\" == '$SB/ueB3.git' ]]"
++
++# B4 — card reduced to garbage (no REMOTE= at all): the vault's own
++# origin still resolves, and the first locked run rewrites a valid card.
++git init -q --bare "$SB/ueB4.git"
++mkdir -p "$SB/ueB4-vault"
++printf '# b4\n' > "$SB/ueB4-vault/note.md"
++env OBS_REMOTE="$SB/ueB4.git" OBS_VAULT="$SB/ueB4-vault" "$OB" init -y >/dev/null 2>&1
++printf 'i deleted the keys here\nrandom text\n' > "$SB/ueB4-vault/.ob-sync/config"
++run "B4 sync survives a garbage identity card" 0 \
++    env OBS_VAULT="$SB/ueB4-vault" "$OB" sync -y
++assert "B4 card rewritten with the real remote" \
++    bash -c "grep -F 'REMOTE=$SB/ueB4.git' '$SB/ueB4-vault/.ob-sync/config'"
++
++# B5 — card truncated to an empty file: same self-heal.
++: > "$SB/ueB4-vault/.ob-sync/config"
++run "B5 sync survives an empty identity card" 0 \
++    env OBS_VAULT="$SB/ueB4-vault" "$OB" sync -y
++assert "B5 empty card rewritten" \
++    bash -c "grep -F 'REMOTE=$SB/ueB4.git' '$SB/ueB4-vault/.ob-sync/config'"
++
++# B6 — extra unknown keys in the card: tolerated, never a parse failure.
++printf 'REMOTE=%s\nBRANCH=main\nNOTE=i like this vault\n' "$SB/ueB4.git" > "$SB/ueB4-vault/.ob-sync/config"
++run "B6 sync tolerates unknown card keys" 0 \
++    env OBS_VAULT="$SB/ueB4-vault" "$OB" sync -y
++
++# B7 — .ob-sync replaced by a FILE: best-effort warn, sync continues.
++git init -q --bare "$SB/ueB7.git"
++mkdir -p "$SB/ueB7-vault"
++printf '# b7\n' > "$SB/ueB7-vault/note.md"
++env OBS_REMOTE="$SB/ueB7.git" OBS_VAULT="$SB/ueB7-vault" "$OB" init -y >/dev/null 2>&1
++rm -rf "$SB/ueB7-vault/.ob-sync"
++printf 'junk' > "$SB/ueB7-vault/.ob-sync"
++run "B7 sync survives .ob-sync-as-a-file" 0 \
++    env OBS_VAULT="$SB/ueB7-vault" "$OB" sync -y
++expect_out "B7 the skip is announced" "Cannot create .*identity not saved"
++
++# B8 — typo'd remote in the card: FAIL HONESTLY, keep the local commit,
++# keep the pre-sync backup, and surface git's own words.
++git init -q --bare "$SB/ueB8.git"
++mkdir -p "$SB/ueB8-vault"
++printf '# b8\n' > "$SB/ueB8-vault/note.md"
++env OBS_REMOTE="$SB/ueB8.git" OBS_VAULT="$SB/ueB8-vault" "$OB" init -y >/dev/null 2>&1
++sed -i "s#REMOTE=.*#REMOTE=$SB/typo-does-not-exist.git#" "$SB/ueB8-vault/.ob-sync/config"
++printf 'more work\n' >> "$SB/ueB8-vault/note.md"
++run "B8 sync fails honestly on a typo'd remote" 1 \
++    env OBS_VAULT="$SB/ueB8-vault" "$OB" sync -y
++expect_out "B8 git's own error is surfaced" "git said|does not appear to be a git repository|fetch_failed"
++assert "B8 local work survives the failed push" \
++    bash -c "git -C '$SB/ueB8-vault' log -1 --format=%s 2>/dev/null | grep -q ."
++assert "B8 pre-sync backup still taken" \
++    bash -c "ls '$SB/backups'/pre-sync-*.tar.gz >/dev/null 2>&1"
++
++# B9 — the anti-cross-vault guarantee: a user hand-edits 'origin' to a
++# FOREIGN repo, but the card still points home. The card travels with
++# the vault and expresses the vault's intent — the foreign repo must
++# receive NOTHING.
++git init -q --bare "$SB/ueB9-mine.git"
++git init -q --bare "$SB/ueB9-foreign.git"
++mkdir -p "$SB/ueB9-vault"
++printf '# b9\n' > "$SB/ueB9-vault/note.md"
++env OBS_REMOTE="$SB/ueB9-mine.git" OBS_VAULT="$SB/ueB9-vault" "$OB" init -y >/dev/null 2>&1
++git -C "$SB/ueB9-vault" remote set-url origin "$SB/ueB9-foreign.git"
++run "B9 sync follows the card, not the hijacked origin" 0 \
++    env OBS_VAULT="$SB/ueB9-vault" "$OB" sync -y
++assert "B9 origin re-aligned to the card" \
++    bash -c "[[ \"\$(git -C '$SB/ueB9-vault' remote get-url origin 2>/dev/null)\" == '$SB/ueB9-mine.git' ]]"
++assert "B9 the foreign repo stayed EMPTY" \
++    bash -c "! git -C '$SB/ueB9-foreign.git' rev-parse refs/heads/main >/dev/null 2>&1"
++assert "B9 the real repo received the vault" \
++    bash -c "git -C '$SB/ueB9-mine.git' ls-tree -r --name-only refs/heads/main 2>/dev/null | grep -qF 'note.md'"
++
++# B10 — card says BRANCH=main, vault is checked out on master: the
++# CURRENT branch outranks the card; the push lands on master.
++git init -q --bare "$SB/ueB10.git"
++mkdir -p "$SB/ueB10-vault"
++printf '# b10\n' > "$SB/ueB10-vault/note.md"
++git -C "$SB/ueB10-vault" init -q -b master
++git -C "$SB/ueB10-vault" add -A
++git -C "$SB/ueB10-vault" commit -qm "master fixture"
++git -C "$SB/ueB10-vault" remote add origin "$SB/ueB10.git"
++mkdir -p "$SB/ueB10-vault/.ob-sync"
++printf 'REMOTE=%s\nBRANCH=main\n' "$SB/ueB10.git" > "$SB/ueB10-vault/.ob-sync/config"
++run "B10 sync respects the checked-out branch" 0 \
++    env OBS_VAULT="$SB/ueB10-vault" "$OB" sync -y
++assert "B10 pushed to the current branch (master)" \
++    bash -c "git -C '$SB/ueB10.git' ls-tree -r --name-only refs/heads/master 2>/dev/null | grep -qF 'note.md'"
++
++# B11 — card present but .git deleted: no fake repo is conjured; the
++# tool refuses honestly, names the real problem, and points at repair
++# (which CAN rebuild from the card) — never a misleading "unsafe state".
++mkdir -p "$SB/ueB11-vault"
++printf '# b11\n' > "$SB/ueB11-vault/note.md"
++mkdir -p "$SB/ueB11-vault/.ob-sync"
++printf 'REMOTE=%s\nBRANCH=main\n' "$SB/ueB10.git" > "$SB/ueB11-vault/.ob-sync/config"
++run "B11 quick refuses without .git even with a card" 1 \
++    env OBS_VAULT="$SB/ueB11-vault" "$OB" quick -y
++expect_out "B11 the diagnosis is honest (no git repository)" "No git repository found"
++expect_out "B11 the remedy points at repair/init" "ob-sync repair|ob-sync init"
++assert "B11 no .git conjured by quick" bash -c "! test -e '$SB/ueB11-vault/.git'"
++assert "B11 the note survives untouched" test -f "$SB/ueB11-vault/note.md"
++
++# B12 — the full self-heal story: the user deleted .git, and repair
++# rebuilds the repository from the vault's OWN identity card.
++git init -q --bare "$SB/ueB12.git"
++mkdir -p "$SB/ueB12-vault"
++printf '# b12\n' > "$SB/ueB12-vault/note.md"
++env OBS_REMOTE="$SB/ueB12.git" OBS_VAULT="$SB/ueB12-vault" "$OB" init -y >/dev/null 2>&1
++env OBS_VAULT="$SB/ueB12-vault" "$OB" sync -y >/dev/null 2>&1
++rm -rf "$SB/ueB12-vault/.git"
++run "B12 repair rebuilds .git from the identity card" 0 \
++    env OBS_VAULT="$SB/ueB12-vault" "$OB" repair -y
++assert "B12 origin restored from the card" \
++    bash -c "[[ \"\$(git -C '$SB/ueB12-vault' remote get-url origin 2>/dev/null)\" == '$SB/ueB12.git' ]]"
++run "B12 sync is green again after the rebuild" 0 \
++    env OBS_VAULT="$SB/ueB12-vault" "$OB" sync -y
++assert "B12 the note still exists" test -f "$SB/ueB12-vault/note.md"
++assert "B12 the remote still holds the vault" \
++    bash -c "git -C '$SB/ueB12.git' ls-tree -r --name-only refs/heads/main 2>/dev/null | grep -qF 'note.md'"
++
++echo "== UE-C. environment & concurrency under user error =="
++
++# C1 — OBS_VAULT points nowhere: warn + degrade, never crash.
++run "C1 status warns on a nonexistent OBS_VAULT" 0 \
++    env OBS_CONFIG="$SB/cfg-absent" OBS_VAULT="$SB/no-such-vault" "$OB" status
++expect_out "C1 the warning names the path" "does not exist"
++
++# C2 — sync against a nonexistent vault: honest failure, no bash noise.
++run "C2 sync fails honestly on a nonexistent vault" 1 \
++    env OBS_CONFIG="$SB/cfg-absent" OBS_VAULT="$SB/no-such-vault" "$OB" sync -y
++expect_no_out "C2 no unbound-variable/syntax noise" "unbound variable|syntax error"
++
++# C3 — double launch: a live PID in the lock makes the second run stand
++# down; the JSON contract still answers (parseable, lock_busy).
++mkdir -p "$LOCKDIR"
++printf '%s\n' "$$" > "$LOCKDIR/pid"
++run "C3 second instance stands down" 2 \
++    env OBS_CONFIG="$SB/cfg-absent" OBS_VAULT="$SB/ueB1-vault" "$OB" sync --json
++expect_out "C3 JSON reports lock_busy" "lock_busy"
++rm -rf "$LOCKDIR"
++
++# C4 — no OBS_CONFIG at all (user deleted ~/.config/ob-sync): default
++# path is derived, status still answers.
++run "C4 status works with the config file deleted" 0 \
++    env -u OBS_CONFIG "$OB" status
++
++echo
++echo "PASS=$PASS FAIL=$FAIL"
++[[ "$FAIL" == 0 ]]

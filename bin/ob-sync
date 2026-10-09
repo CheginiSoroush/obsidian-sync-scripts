@@ -387,7 +387,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.5.0"
+readonly VERSION="9.5.1"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -478,17 +478,44 @@ HAS_PGREP=0;   command -v pgrep   >/dev/null 2>&1 && HAS_PGREP=1
 VAULT_SOURCE="unresolved"
 
 ##
+# Normalize a raw value read from a KEY=VALUE line. Hand-edited files are
+# a fact of life: Windows/Android editors leave CRLF endings behind, users
+# copy values wrapped in quotes out of tutorials, and stray outer spaces
+# sneak in. One layer of matched wrapping quotes, trailing CRs and outer
+# whitespace are stripped — what survives is the value ob-sync actually
+# uses (config_set never writes any of these, so nothing legitimate is
+# lost). Field-reported 9.5.0: a CRLF-edited identity card corrupted
+# 'origin' with an invisible CR and every fetch died on a phantom URL.
+##
+conf_value_clean() {
+    local val="$1"
+    val=${val%$'\r'}
+    # trim outer whitespace (the standard non-greedy trim idiom)
+    val=${val#"${val%%[![:space:]]*}"}
+    val=${val%"${val##*[![:space:]]}"}
+    if [[ ${#val} -ge 2 ]]; then
+        local q=${val:0:1}
+        if [[ ( "$q" == '"' || "$q" == "'" ) && "${val: -1}" == "$q" ]]; then
+            val=${val:1:${#val}-2}
+        fi
+    fi
+    printf '%s\n' "$val"
+}
+
+##
 # Read a KEY=VALUE pair from the config file.
+# The file must be a REGULAR file — a directory (a mkdir typo) or a FIFO
+# would otherwise fail noisily or block on open (read error spam, 9.5.0).
 # @param $1 key
 # @stdout value when present; @return 1 when file or key is absent
 ##
 config_get() {
-    [[ -r "$CONFIG_FILE" ]] || return 1
+    [[ -r "$CONFIG_FILE" && -f "$CONFIG_FILE" ]] || return 1
     local key="$1" line
     while IFS= read -r line; do
         case "$line" in
             ''|'#'*) continue ;;
-            "$key="*) printf '%s\n' "${line#"$key="}"; return 0 ;;
+            "$key="*) conf_value_clean "${line#"$key="}"; return 0 ;;
         esac
     done < "$CONFIG_FILE"
     return 1
@@ -748,12 +775,12 @@ vault_conf_path() {
 vault_conf_get() {
     local f
     f=$(vault_conf_path)
-    [[ -r "$f" ]] || return 1
+    [[ -r "$f" && -f "$f" ]] || return 1
     local key="$1" line
     while IFS= read -r line; do
         case "$line" in
             ''|'#'*) continue ;;
-            "$key="*) printf '%s\n' "${line#"$key="}"; return 0 ;;
+            "$key="*) conf_value_clean "${line#"$key="}"; return 0 ;;
         esac
     done < "$f"
     return 1
@@ -1957,6 +1984,19 @@ clean_repair_artifacts() {
 ##
 ensure_safe() {
     clean_repair_artifacts
+    if [[ ! -d "$VAULT/.git" ]]; then
+        # A vault with no .git is not an "unsafe repository" — there is no
+        # repository here at all. Diagnose it honestly (the generic
+        # not-in-a-safe-state message misled users into thinking their
+        # data was the problem) and point at the two real roads back:
+        # repair rebuilds metadata from the vault's own remote — possible
+        # precisely because the identity card carries it — init starts
+        # from scratch.
+        error "No git repository found in: $VAULT"
+        error "Run: ob-sync repair  (rebuilds metadata from the vault's remote)"
+        error "      — or: ob-sync init  (start a fresh repository)"
+        return 1
+    fi
     check_repo_safe && return 0
 
     warn "Repository is not in a safe state"

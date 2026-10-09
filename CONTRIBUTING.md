@@ -10,6 +10,7 @@ mobile/install.sh      Termux installer
 desktop/install.sh     Linux / macOS installer
 completions/           Bash & zsh tab-completion
 tests/run-tests.sh     Functional test suite (self-contained sandbox)
+tests/user-error-tests.sh  User-error resilience suite (broken configs, deleted .git, …)
 docs/                  Troubleshooting, deep-dive docs & TUI screenshot
 .github/workflows/     CI (ShellCheck gate, test suite, markdownlint) + release automation
 ```
@@ -24,13 +25,14 @@ platform differences belong behind the portability helpers inside the script.
 
    ```bash
    shellcheck -x -S warning bin/ob-sync mobile/install.sh desktop/install.sh \
-     completions/ob-sync.bash tests/run-tests.sh
+     completions/ob-sync.bash tests/run-tests.sh tests/user-error-tests.sh
    ```
 
-3. Run the functional test suite (self-contained, ~2s, no network):
+3. Run BOTH test suites (self-contained, no network):
 
    ```bash
-   bash tests/run-tests.sh    # currently 330 assertions, must all pass
+   bash tests/run-tests.sh            # 372 functional assertions, must all pass
+   bash tests/user-error-tests.sh     # 56 user-error resilience checks, must all pass
    ```
 
 4. Smoke-test on a real device or machine:
@@ -58,7 +60,7 @@ platform differences belong behind the portability helpers inside the script.
 ## Pull request checklist
 
 - [ ] `shellcheck -S warning` passes locally
-- [ ] `bash tests/run-tests.sh` passes locally (exit code 0)
+- [ ] `bash tests/run-tests.sh` AND `bash tests/user-error-tests.sh` pass locally (exit code 0)
 - [ ] Tested on Termux **or** desktop (ideally both, for platform-sensitive changes)
 - [ ] Help text and docs updated if behavior changed
 - [ ] Changelog entry added under the next version heading
