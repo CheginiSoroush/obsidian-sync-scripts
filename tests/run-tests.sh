@@ -14,6 +14,16 @@
 
 set -u
 
+# Hermetic stdin (9.5.2 field report): when this suite is driven from an
+# interactive terminal — e.g. a hand-run `bash some-apply.sh` — ob-sync's
+# [[ -t 0 ]] paths (the multi-vault picker, consent prompts) wake up, block
+# on the terminal and consume human keystrokes, flipping exit codes and
+# captured output nondeterministically. The suite's contract is strictly
+# non-interactive: detach stdin once, here, for every command below.
+# (Piped fixtures inside `bash -c 'printf … | ob-sync …'` are unaffected —
+# their pipes are narrower and win.)
+exec 0</dev/null
+
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 OB="$ROOT/bin/ob-sync"
 
@@ -86,6 +96,19 @@ export OBS_LOG="$SB/ob.log"
 export OBS_GIT_TIMEOUT=30
 export OBS_VAULT="$SB/vault1"
 export OBS_REMOTE="$SB/remote.git"
+# Host-vault firewall (9.5.2 field report #2): on a machine whose /media,
+# /mnt or /run/media/<user> carry a REAL Obsidian vault, the default
+# discovery roots leaked that vault into every check that resolves the
+# vault without a pin — the auto-detection checks in sections 20/22 then
+# saw two candidates and honestly refused ("Multiple vaults found"),
+# three phantom failures that never happen on a bare machine.
+# OB_DISCOVER_ROOTS replaces the default roots wholesale (discover_vaults
+# in bin/ob-sync), so the harness points it at an empty sandbox folder:
+# no host vault can reach the suite. Checks that are about discovery
+# re-point it at fixtures (sections 20/22 → $SB/home/Documents,
+# section 41 → $SB/media-root).
+mkdir -p "$SB/discover-roots"
+export OB_DISCOVER_ROOTS="$SB/discover-roots"
 LOCKDIR="$SB/tmp/obs-sync.lock"
 
 git config --global user.email test@example.com
@@ -314,12 +337,17 @@ echo "== 20. status --json stays clean when the vault is auto-detected =="
 mkdir -p "$SB/home/Documents/Obsidian/.obsidian"
 printf '# note\n' > "$SB/home/Documents/Obsidian/note.md"
 if command -v python3 >/dev/null 2>&1; then
+    # The discovery root is pinned to the fixture's Documents folder so a
+    # real vault under /media on this machine can never join the scan and
+    # turn the single-candidate auto-detection into an honest refusal.
     t "auto-detected vault: status --json parses"  0 \
         env -u OBS_VAULT OBS_CONFIG="$SB/config-json" OBS_BACKUP_DIR="$SB/backups" \
+            OB_DISCOVER_ROOTS="$SB/home/Documents" \
             OBS_LOG="$SB/ob.log" TMPDIR="$SB/tmp" HOME="$SB/home" \
         bash -c "${OB@Q} status --json | python3 -m json.tool >/dev/null"
     assertout "auto-detected vault: JSON has version field"  '"version"' \
         env -u OBS_VAULT OBS_CONFIG="$SB/config-json" OBS_BACKUP_DIR="$SB/backups" \
+            OB_DISCOVER_ROOTS="$SB/home/Documents" \
             OBS_LOG="$SB/ob.log" TMPDIR="$SB/tmp" HOME="$SB/home" \
         bash -c "${OB@Q} status --json"
 else
@@ -400,9 +428,11 @@ PY
         bash -c "${OB@Q} restore --list --json latest | python3 '$SB/check-prev.py'"
 
     # JSON must be the ONLY thing on stdout even when the vault is
-    # auto-detected (same regression class as section 20).
+    # auto-detected (same regression class as section 20). The discovery
+    # root is pinned like there, so host /media vaults stay outside.
     t "restore --list --json: auto-detected vault stays clean" 0 \
         env -u OBS_VAULT OBS_CONFIG="$SB/config-json" OBS_BACKUP_DIR="$SB/backups" \
+            OB_DISCOVER_ROOTS="$SB/home/Documents" \
             OBS_LOG="$SB/ob.log" TMPDIR="$SB/tmp" HOME="$SB/home" \
         bash -c "${OB@Q} restore --list --json | python3 -m json.tool >/dev/null"
 else
@@ -1946,6 +1976,47 @@ rm -rf "$SB/vault40c/.ob-sync"
 env OBS_VAULT="$SB/vault40c" "$OB" status >/dev/null 2>&1 || :
 assert "40 status never writes the identity" bash -c "! test -e '$SB/vault40c/.ob-sync'"
 fi
+
+echo "== 41. vault discovery reaches mounted drives (9.5.2) =="
+
+# 41a — OB_DISCOVER_ROOTS replaces the default roots entirely: a vault
+# under a fake mounted-media tree is auto-detected with no OBS_VAULT
+# and no config VAULT (the field-reported /media/<user>/… case).
+mkdir -p "$SB/media-root/shared/Obsidian/media-vault/.obsidian"
+printf '# media vault\n' > "$SB/media-root/shared/Obsidian/media-vault/note41.md"
+: > "$SB/cfg41"
+t "41 vault under a media root is auto-detected" 0 \
+    env -u OBS_VAULT OBS_CONFIG="$SB/cfg41" OB_DISCOVER_ROOTS="$SB/media-root" "$OB" status
+assert "41 the media vault is the one detected" \
+    bash -c "grep -qF 'Auto-detected vault: $SB/media-root/shared/Obsidian/media-vault' '$SB/out.txt'"
+
+# 41b — two vaults under the override root, non-TTY: still an honest
+# refusal (never a silent pick, never a crash).
+mkdir -p "$SB/media-root/Obsidian/second/.obsidian"
+t "41 two media vaults refuse honestly without a TTY" 1 \
+    env -u OBS_VAULT OBS_CONFIG="$SB/cfg41" OB_DISCOVER_ROOTS="$SB/media-root" "$OB" status
+assert "41 the refusal explains itself" \
+    grep -q "Multiple vaults found" "$SB/out.txt"
+
+# 41c — garbage roots (missing dirs, empty entries): discovery yields
+# nothing, the tool degrades to the default vault path without noise.
+t "41 garbage roots degrade to the default vault" 0 \
+    env -u OBS_VAULT OBS_CONFIG="$SB/cfg41" OB_DISCOVER_ROOTS="/no/such/root::/also/absent" "$OB" status
+assert "41 no unbound-variable noise on garbage roots" \
+    bash -c "! grep -qE 'unbound variable|syntax error' '$SB/out.txt'"
+
+# 41d — the switcher contract, at source level (the TTY prompts are
+# exercised by the pty smoke tests of the release checklist).
+assert "41 switcher offers a typed path with one vault" \
+    grep -q "type a full vault path" "$OB"
+assert "41 discovery probes the mountpoints" \
+    bash -c "grep -q '/run/media' '$OB' && grep -q '\"/mnt\"' '$OB'"
+assert "41 OB_DISCOVER_ROOTS override exists" \
+    grep -q "OB_DISCOVER_ROOTS" "$OB"
+assert "41 non-vault directories need confirmation" \
+    grep -q "it may not be an Obsidian vault" "$OB"
+assert "41 wrong typed paths are named honestly" \
+    grep -q "No such directory" "$OB"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

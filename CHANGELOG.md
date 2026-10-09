@@ -4,6 +4,48 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.5.2] — Vaults on mounted drives are visible now
+
+Field report: a vault living on a second disk (`/media/<user>/shared/
+Obsidian/obsidian`) was invisible to the switcher — discovery probed
+only three folders inside `$HOME`, and with a single known vault the
+menu just printed "Only one vault known" and returned. Both fixed.
+
+### Added
+
+- **Mounted-drive discovery** — `discover_vaults` now probes the
+  standard freedesktop mountpoints (`/media` — which also covers its
+  per-user and VirtualBox `sf_` subfolders —, `/run/media/<user>`,
+  `/mnt`) with a bounded depth of 5, so huge network shares cannot
+  stall the picker. The `$HOME` roots keep the old shallow depth.
+- **`OB_DISCOVER_ROOTS`** — colon-separated override for the discovery
+  roots entirely (sandboxes, tests, exotic layouts).
+- **Manual path entry in menu 19** — with one known vault the menu now
+  asks `Press Enter to keep it, or type a full vault path:`; with no
+  known vault it offers the same. The numbered multi-vault picker
+  already accepted typed paths — it now validates them with the same
+  honest errors.
+
+### Fixed
+
+- **Typed paths fail honestly** — a nonexistent directory is named and
+  refused (`No such directory: …`), a directory without `.obsidian`
+  asks for confirmation before the session moves, a non-git vault
+  warns that Init/Repair must run there first.
+- **Docs drift** — every stale `9.3.0` version string in the READMEs
+  (EN/FA/ES), the header notes and the menu mock is synced to 9.5.2.
+- **Test suites are terminal-proof** — both suites detach stdin
+  (`exec 0</dev/null`) before running, so driving them from an
+  interactive terminal (a hand-run apply script) can no longer feed
+  human keystrokes to the multi-vault picker or consent prompts and
+  flip results nondeterministically.
+- **Test suites are host-vault-proof** — both harnesses pin
+  `OB_DISCOVER_ROOTS` to an empty sandbox folder, so a real vault
+  under `/media` on the machine running the tests can no longer leak
+  into the checks that resolve the vault without a pin (the section
+  20/22 auto-detection regression tests saw it as a second candidate
+  and honestly refused — three phantom failures).
+
 ## [9.5.1] — The tool survives the user (user-error hardening)
 
 A dedicated user-error test suite (`tests/user-error-tests.sh`) now attacks

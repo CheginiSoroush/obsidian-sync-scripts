@@ -27,6 +27,11 @@
 
 set -u
 
+# Hermetic stdin: a hand-run apply script must not be able to feed its
+# terminal to ob-sync's [[ -t 0 ]] paths (pickers, consent prompts) while
+# the suite is watching — see the longer note in run-tests.sh.
+exec 0</dev/null
+
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 OB="$ROOT/bin/ob-sync"
 
@@ -88,6 +93,13 @@ export GIT_CONFIG_GLOBAL="$SB/home/.gitconfig"
 export OBS_BACKUP_DIR="$SB/backups"
 export OBS_LOG="$SB/ob.log"
 export OBS_GIT_TIMEOUT=30
+# Host-vault firewall — same as run-tests.sh (9.5.2 field report #2):
+# scenarios that resolve the vault with no pin (A1/A5/A6) must never
+# auto-detect a REAL vault living under /media on the host machine.
+# Where discovery itself is the subject, the scenario re-points this
+# override at its own fixtures (C5/C6/C7).
+mkdir -p "$SB/discover-roots"
+export OB_DISCOVER_ROOTS="$SB/discover-roots"
 # NOTE: OBS_CONFIG / OBS_VAULT / OBS_REMOTE are deliberately NOT exported —
 # every scenario below passes its own broken values, exactly like a user
 # would. Nothing may leak between scenarios.
@@ -348,6 +360,29 @@ rm -rf "$LOCKDIR"
 # path is derived, status still answers.
 run "C4 status works with the config file deleted" 0 \
     env -u OBS_CONFIG "$OB" status
+
+# C5 — discovery override with only garbage roots: no candidates, the
+# tool falls back to the default vault path and degrades honestly
+# (never a crash, never an invented vault, never bash noise).
+run "C5 garbage OB_DISCOVER_ROOTS degrade honestly" 0 \
+    env -u OBS_VAULT OBS_CONFIG="$SB/cfg-absent" \
+        OB_DISCOVER_ROOTS="/no/such/root::/also/absent" "$OB" status
+expect_no_out "C5 no unbound-variable/syntax noise" "unbound variable|syntax error"
+
+# C6 — an override root that is a FILE (not a directory) is skipped.
+run "C6 file-valued roots are skipped silently" 0 \
+    env -u OBS_VAULT OBS_CONFIG="$SB/cfg-absent" \
+        OB_DISCOVER_ROOTS="$SB/ob.log" "$OB" status
+
+# C7 — a real vault under the override root is found and named, and it
+# still starts remote-less (no invented remote, ever).
+mkdir -p "$SB/ueC7-root/Obsidian/c7/.obsidian"
+printf '# c7\n' > "$SB/ueC7-root/Obsidian/c7/note.md"
+run "C7 vault on an override root is found" 0 \
+    env -u OBS_VAULT OBS_CONFIG="$SB/cfg-absent" \
+        OB_DISCOVER_ROOTS="$SB/ueC7-root" "$OB" status
+expect_out "C7 the vault is reported as auto-detected" \
+    "Auto-detected vault: $SB/ueC7-root/Obsidian/c7"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

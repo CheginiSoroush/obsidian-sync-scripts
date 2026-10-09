@@ -6,7 +6,7 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#   Version   : 9.3.0
+#   Version   : 9.5.2
 #   Author    : Soroush Chegini
 #   License   : MIT
 #   Repository: https://github.com/CheginiSoroush/obsidian-sync-scripts
@@ -34,6 +34,70 @@
 #       · One core          — platform differences live behind portability
 #                             helpers, never in forks of this script
 #       · Graceful failure  — errors report and return; nothing exits silently
+#
+#   RELEASE NOTES — 9.5.2 (vaults on mounted drives are visible now)
+#       · discovery probes the standard mountpoints too — /media (also
+#         its per-user and VirtualBox sf_ subfolders), /run/media/<user>
+#         and /mnt — with a bounded depth, so a vault on a second disk
+#         or shared folder (e.g. /media/<user>/shared/Obsidian/<vault>)
+#         shows up in the switcher without any configuration.
+#       · menu 19 no longer dead-ends with a single vault: it offers to
+#         type a full vault path (empty = keep), and the discovery roots
+#         can be overridden wholesale with OB_DISCOVER_ROOTS.
+#       · typed paths are validated honestly: a nonexistent directory is
+#         named and refused, a directory without .obsidian asks for
+#         confirmation, a non-git vault warns before the session moves.
+#       · docs: every stale version string (READMEs EN/FA/ES, menu mock)
+#         synced to 9.5.2.
+#
+#   RELEASE NOTES — 9.5.1 (the tool survives the user)
+#       · new tests/user-error-tests.sh (56 checks) attacks ob-sync the
+#         way real users do: hand-edited configs, CRLF endings, quoted
+#         values, wrong paths, double launches. Contract: never lose
+#         data, never borrow another vault's remote, always fail honest.
+#       · config/identity-card values are parsed clean: a \r from a
+#         Windows/Android editor no longer corrupts the remote URL (a
+#         CR-stuck origin self-heals from the card); quotes and outer
+#         padding no longer become part of the value.
+#       · a config path pointing at a directory (mkdir typo) is treated
+#         as absent instead of spewing "Is a directory" bash noise.
+#       · a vault whose .git is gone gets an honest "No git repository
+#         found in: …" pointing at repair/init, not a misleading
+#         "Repository is not in a safe state".
+#
+#   RELEASE NOTES — 9.5.0 (the vault carries its own identity card)
+#       · <vault>/.ob-sync/config stores the vault's own REMOTE and
+#         BRANCH as a normal tracked file: it travels with the vault,
+#         so a second device runs init -y + sync without a single
+#         remote question.
+#       · self-healing origin: every locked operation re-aligns origin
+#         with the card — a lost remote heals itself and can never
+#         heal toward another vault's repository.
+#       · legacy vaults silently gain a card from their own origin on
+#         the first locked run; nothing is asked, nothing changes hands.
+#
+#   RELEASE NOTES — 9.4.2 (the config remote stops crossing vault lines)
+#       · every session is bound to its resolved vault: the machine-wide
+#         config REMOTE is trusted only for the pinned vault. repair can
+#         no longer clone another vault's repository into the picked
+#         vault, and quick can no longer push the picked vault's notes
+#         into a foreign repo.
+#       · the vault's own origin now outranks the config REMOTE in
+#         remote_url() — push and repair finally target the same repo.
+#       · menu 19 warns when the picked vault has no remote.
+#
+#   RELEASE NOTES — 9.4.1 (visible credentials & honest git errors)
+#       · credential prompts and git errors print verbatim instead of
+#         being swallowed by redirects; an HTTPS stall guard stops
+#         indefinite hangs; the credential store file is created 0600.
+#
+#   RELEASE NOTES — 9.4.0 (a menu that follows your vaults)
+#       · menu 19) Switch: session vault switcher — the vault picker
+#         opens the menu when several vaults are known and can be
+#         re-opened at any time; the prompt now reads [0-19]. The
+#         choice is session-only: cron and scripts keep the pinned vault.
+#       · init bootstraps git's store credential helper for HTTPS
+#         remotes (with explicit consent) — the token is typed once.
 #
 #   RELEASE NOTES — 9.3.0 (repair that tells the truth + menu-init)
 #       · menu gains 18) Init: first-time setup is no longer CLI-only —
@@ -387,7 +451,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.5.1"
+readonly VERSION="9.5.2"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -596,23 +660,46 @@ load_config_overrides() {
 
 ##
 # Probe common roots for Obsidian vaults (directories containing .obsidian/).
-# Deliberately shallow: this runs on Android shared storage where deep scans
-# are expensive. Custom locations (e.g. a mounted partition) are reached via
-# the config file or OBS_VAULT, never by widening this scan.
+# Shallow on $HOME (Android shared storage keeps deep scans expensive), but
+# since 9.5.2 the standard mountpoints are probed too: a vault on a second
+# disk or a shared folder (/media/<user>/shared/Obsidian/obsidian) used to
+# be invisible. OB_DISCOVER_ROOTS (colon-separated) overrides every default
+# root — for sandboxes, tests and exotic layouts.
 ##
 discover_vaults() {
     local -a roots=()
-    local root d
-    if (( IS_TERMUX )); then
+    local root d depth mu="${USER:-$(id -un 2>/dev/null)}"
+    local override=0
+
+    if [[ -n "${OB_DISCOVER_ROOTS:-}" ]]; then
+        override=1
+        while IFS= read -r root; do
+            [[ -n "$root" ]] && roots+=("$root")
+        done < <(printf '%s\n' "$OB_DISCOVER_ROOTS" | tr ':' '\n')
+    elif (( IS_TERMUX )); then
         roots=("$HOME/storage/shared/Documents" "$HOME/storage/shared/Obsidian" "$HOME/storage/shared")
     else
         roots=("$HOME/Documents" "$HOME/Obsidian" "$HOME/vaults")
+        # Depth stays bounded so a huge network share cannot stall the
+        # picker. One /media scan covers /media/<user>/… and the
+        # VirtualBox-style /media/sf_… shares alike.
+        [[ -n "$mu" && -d "/run/media/$mu" ]] && roots+=("/run/media/$mu")
+        [[ -d "/media" ]] && roots+=("/media")
+        [[ -d "/mnt" ]] && roots+=("/mnt")
     fi
     for root in "${roots[@]}"; do
         [[ -d "$root" ]] || continue
+        case "$root" in
+            /media|/media/*|/mnt|/mnt/*|/run/media/*) depth=5 ;;
+            *)
+                # explicitly named roots are scanned deeper: the operator
+                # pointed ob-sync at them on purpose (tests, sandboxes,
+                # nested layouts like …/Obsidian/<vault>/…)
+                if (( override )); then depth=5; else depth=2; fi ;;
+        esac
         while IFS= read -r -d '' d; do
             printf '%s\n' "${d%/.obsidian}"
-        done < <(find "$root" -maxdepth 2 -type d -name .obsidian -print0 2>/dev/null)
+        done < <(find "$root" -maxdepth "$depth" -type d -name .obsidian -print0 2>/dev/null)
     done | sort -u
 }
 
@@ -6305,6 +6392,79 @@ cmd_config() {
 # @param $1 "force" — show the list even with a single vault (used by
 #            the explicit menu item; the startup call skips silently)
 ##
+
+##
+# 9.5.2 — switch the session to an already-resolved absolute path.
+# Shared tail of every switch path (numbered picker, manual entry): the
+# non-vault confirmation, the not-a-repo warning, the identity-card
+# reconciliation and the remote report all live here, in one place.
+# The config file is never rewritten — session-only, cron keeps its pin.
+# @return 0 when the session vault changed, 1 when it did not
+##
+session_switch_to() {
+    local picked="$1"
+    if [[ "$picked" == "$VAULT" ]]; then
+        info "Already active: $VAULT"
+        return 1
+    fi
+    if [[ ! -d "$picked/.obsidian" ]]; then
+        warn "No .obsidian inside: $picked — it may not be an Obsidian vault"
+        local ans=""
+        read -r -p "  Use it anyway? [y/N] " ans || return 1
+        case "$ans" in
+            y|Y) : ;;
+            *)   info "Keeping: $VAULT"; return 1 ;;
+        esac
+    fi
+    if [[ ! -e "$picked/.git" ]]; then
+        warn "Not a git repository yet — run 18) Init or 7) Repair inside it before syncing"
+    fi
+
+    # Re-bind the session to this vault's own git metadata. The config
+    # REMOTE/BRANCH belong to the pinned vault and must NOT leak across
+    # vaults — two vaults with two separate remotes would otherwise
+    # cross-sync (repair would clone the foreign repo, quick would push
+    # into it). bind_session_remote resolves THIS vault's origin and only
+    # falls back to the config file when this vault is the pinned one.
+    VAULT="$picked"
+    VAULT_SOURCE="menu (this session)"
+    bind_session_remote
+    # The freshly picked vault may carry its own identity card
+    # (.ob-sync/config): align origin with it right away, so the remote
+    # report below and every command dispatched from this menu session
+    # see the vault's OWN remote — never another vault's.
+    ALLOW_VAULT_CONF=1
+    vault_conf_reconcile
+
+    success "Vault switched for this session: $VAULT"
+    local eff_remote
+    eff_remote=$(remote_url 2>/dev/null) || eff_remote=""
+    if [[ -z "$eff_remote" ]]; then
+        warn "This vault has no remote yet — sync/quick/repair will refuse until one is connected"
+        warn "Connect it with: ob-sync remote <url>   (or 18) Init)"
+    else
+        info "Remote: $eff_remote"
+    fi
+    warn "Session-only — cron keeps the pinned vault. Re-pin with 18) Init."
+    return 0
+}
+
+##
+# 9.5.2 — validate a path typed by the user and switch to it (the front
+# door of every manual-entry prompt). ~ is expanded; the directory must
+# exist and is canonicalized before session_switch_to takes over.
+# @return 0 when the session vault changed, 1 when it did not
+##
+try_user_path() {
+    local p="${1-}"
+    p="${p/#\~/$HOME}"
+    if [[ ! -d "$p" ]]; then
+        error "No such directory: $p — keeping: $VAULT"
+        return 1
+    fi
+    session_switch_to "$(cd "$p" 2>/dev/null && pwd -P)"
+}
+
 pick_vault_menu() {
     [[ -t 0 ]] || return 0
     local force=0
@@ -6312,7 +6472,7 @@ pick_vault_menu() {
 
     local -a cands=()
     local -A seen=()
-    local cfg cur="" c picked tag reply default i
+    local cfg cur="" c picked tag reply="" default i
 
     # The pinned vault leads the list and stays the default choice.
     cfg=$(config_get VAULT) || :
@@ -6329,11 +6489,19 @@ pick_vault_menu() {
     done < <(discover_vaults)
 
     if (( ${#cands[@]} == 0 )); then
-        (( force )) && warn "No vault found — set one up with 18) Init"
+        (( force )) || return 0
+        warn "No vault found — set one up with 18) Init, or type a full vault path now."
+        read -r -p "  Full path (empty = keep $VAULT): " reply || :
+        [[ -z "$reply" ]] && return 0
+        try_user_path "$reply" || :
         return 0
     fi
     if (( ${#cands[@]} == 1 )); then
-        (( force )) && info "Only one vault known: ${cands[0]}"
+        (( force )) || return 0
+        info "Only one vault known: ${cands[0]}"
+        read -r -p "  Press Enter to keep it, or type a full vault path: " reply || :
+        [[ -z "$reply" ]] && return 0
+        try_user_path "$reply" || :
         return 0
     fi
 
@@ -6353,44 +6521,26 @@ pick_vault_menu() {
     reply="${reply:-$default}"
 
     picked=""
-    if [[ -d "$reply" ]]; then
-        picked=$(cd "$reply" 2>/dev/null && pwd -P) || picked=""
-    elif [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#cands[@]} )); then
+    if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#cands[@]} )); then
         picked="${cands[reply - 1]}"
+    elif [[ -n "$reply" ]]; then
+        # 9.5.2: a typed path is validated honestly — ~ works, and a
+        # wrong path is named instead of a generic "invalid selection".
+        reply="${reply/#\~/$HOME}"
+        if [[ ! -d "$reply" ]]; then
+            error "No such directory: $reply — keeping: $VAULT"
+            return 0
+        fi
+        picked=$(cd "$reply" 2>/dev/null && pwd -P) || picked=""
     fi
     if [[ -z "$picked" ]]; then
         error "Invalid selection — keeping: $VAULT"
         return 0
     fi
-    [[ "$picked" == "$VAULT" ]] && return 0
-
-    VAULT="$picked"
-    VAULT_SOURCE="menu (this session)"
-
-    # Re-bind the session to this vault's own git metadata. The config
-    # REMOTE/BRANCH belong to the pinned vault and must NOT leak across
-    # vaults — two vaults with two separate remotes would otherwise
-    # cross-sync (repair would clone the foreign repo, quick would push
-    # into it). bind_session_remote resolves THIS vault's origin and only
-    # falls back to the config file when this vault is the pinned one.
-    bind_session_remote
-    # The freshly picked vault may carry its own identity card
-    # (.ob-sync/config): align origin with it right away, so the remote
-    # line below and every command dispatched from this menu session see
-    # the vault's OWN remote — never another vault's.
-    ALLOW_VAULT_CONF=1
-    vault_conf_reconcile
-
-    success "Vault switched for this session: $VAULT"
-    local eff_remote
-    eff_remote=$(remote_url 2>/dev/null) || eff_remote=""
-    if [[ -z "$eff_remote" ]]; then
-        warn "This vault has no remote yet — sync/quick/repair will refuse until one is connected"
-        warn "Connect it with: ob-sync remote <url>   (or 18) Init)"
-    else
-        info "Remote: $eff_remote"
-    fi
-    warn "Session-only — cron keeps the pinned vault. Re-pin with 18) Init."
+    # Validation, identity-card reconciliation and the session-only
+    # warnings all live in session_switch_to now (shared with the
+    # manual-entry prompts above).
+    session_switch_to "$picked" || :
     return 0
 }
 
@@ -6579,6 +6729,10 @@ cmd_help() {
                           (default: ~/ob-sync-cron.log)
     OBS_SKIP_BACKUP       Set to 1 to skip the pre-sync safety backup
     OBS_ATTACH_DIR        Destination folder for 'organize --fix' (default: Attachments)
+    OB_DISCOVER_ROOTS     Colon-separated override of the folders the vault
+                          switcher scans (default: ~/Documents ~/Obsidian
+                          ~/vaults + the mountpoints /media, /run/media/<user>
+                          and /mnt)
 
   VAULT IDENTITY
     <vault>/.ob-sync/config   The vault's own identity card (REMOTE, BRANCH).
