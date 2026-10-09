@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.4.1] — Network errors that speak, and stalls that end
+
+Field report: a Termux sync reached the push, "asked for the username",
+and then appeared to freeze forever. It had not frozen — every fetch and
+push ran with `2>/dev/null`, so git's credential prompt was thrown away
+while git sat waiting for an answer nobody could see, and an interactive
+run has no watchdog (by design — prompts must be able to block).
+
+### Fixed
+
+- **Swallowed git stderr during sync/pull/push** — interactive runs now
+  stream git's stderr, so `Username for '…'` / `Password for '…'`
+  prompts are visible and answerable, and `Writing objects` progress
+  shows on slow uploads. Machine runs (`--json`, cron) capture stderr
+  and print `git said:` with the first lines on failure — the JSON
+  document on stdout stays byte-clean (the UI helpers are already
+  SILENT_UI-aware).
+- **Zombie network transfers** — HTTPS fetch/push now run with
+  `http.lowSpeedLimit`/`http.lowSpeedTime` (defaults: 512 bytes/s for
+  60s, override via `OBS_NET_LOW_SPEED` / `OBS_NET_LOW_TIME`, `0`
+  disables): a dead connection fails in about a minute with an
+  actionable message instead of hanging forever. Healthy-but-slow
+  uploads keep going; only truly stalled transfers are cut.
+- The credential store file is created with `0600` permissions the
+  moment the helper is enabled.
+
 ## [9.4.0] — A menu that follows your vaults + credentials that stick
 
 Two field reports from daily Termux use drove this release: a second

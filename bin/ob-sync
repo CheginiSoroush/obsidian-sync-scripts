@@ -387,7 +387,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.4.0"
+readonly VERSION="9.4.1"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -432,6 +432,14 @@ GIT_TIMEOUT="${OBS_GIT_TIMEOUT:-120}"
 # them forever. Set OBS_LOCAL_TIMEOUT=0 to disable.
 LOCAL_TIMEOUT="${OBS_LOCAL_TIMEOUT:-600}"
 
+# Network stall guard: abort an HTTPS transfer that has moved less than
+# NET_LOW_SPEED bytes/s for NET_LOW_TIME consecutive seconds. A dead
+# mobile connection used to hang an interactive run forever (TTY mode
+# keeps no overall watchdog because credential prompts must be able to
+# block). Set OBS_NET_LOW_SPEED=0 to disable.
+NET_LOW_SPEED="${OBS_NET_LOW_SPEED:-512}"
+NET_LOW_TIME="${OBS_NET_LOW_TIME:-60}"
+
 # Behaviour switches.
 SKIP_BACKUP="${OBS_SKIP_BACKUP:-0}"
 ATTACH_DIR="${OBS_ATTACH_DIR:-Attachments}"
@@ -449,6 +457,8 @@ TEMP_PATHS=()
 [[ "$KEEP_BACKUPS" =~ ^[0-9]+$ ]] || KEEP_BACKUPS=10
 [[ "$GIT_TIMEOUT"  =~ ^[0-9]+$ ]] || GIT_TIMEOUT=120
 [[ "$LOCAL_TIMEOUT" =~ ^[0-9]+$ ]] || LOCAL_TIMEOUT=600
+[[ "$NET_LOW_SPEED" =~ ^[0-9]+$ ]] || NET_LOW_SPEED=512
+[[ "$NET_LOW_TIME"  =~ ^[0-9]+$ ]] || NET_LOW_TIME=60
 
 # Optional tooling detection (graceful fallbacks for minimal systems).
 HAS_TIMEOUT=0; command -v timeout >/dev/null 2>&1 && HAS_TIMEOUT=1
@@ -1455,11 +1465,46 @@ run_local_timeout() {
 # unattended case, so it yields whenever stdin is a terminal.
 ##
 net() {
-    if [[ -t 0 ]]; then
-        g "$@"
-    else
-        run_with_timeout git -c "safe.directory=$VAULT" -C "$VAULT" "$@"
+    local -a stall=()
+    if (( NET_LOW_SPEED > 0 && NET_LOW_TIME > 0 )); then
+        stall=(-c "http.lowSpeedLimit=$NET_LOW_SPEED" -c "http.lowSpeedTime=$NET_LOW_TIME")
     fi
+    if [[ -t 0 ]]; then
+        g "${stall[@]}" "$@"
+    else
+        run_with_timeout git -c "safe.directory=$VAULT" -C "$VAULT" "${stall[@]}" "$@"
+    fi
+}
+
+##
+# Network wrapper that keeps the UI clean WITHOUT hiding diagnostics.
+#
+# Interactive (stderr is a TTY): git's stderr streams straight through,
+# so a credential prompt is VISIBLE and answerable — a swallowed prompt
+# used to look exactly like a hang (the #1 Termux field report for
+# 9.4.0). Machine mode (--json, cron): stderr is captured and surfaced
+# as "git said:" on failure only, so the JSON document on stdout stays
+# byte-clean (warn() is SILENT_UI-aware and demotes itself to the log).
+##
+net_quiet() {
+    if [[ -t 2 ]]; then
+        net "$@"
+        return $?
+    fi
+    local errlog rc line
+    errlog=$(mktemp) || { net "$@"; return $?; }
+    temp_register "$errlog"
+    # Capture the REAL exit status. `rc=$?` after a body-less-else `if`
+    # would read the IF STATEMENT's status — and an `if` whose condition
+    # fails with no else clause returns 0 (bash gotcha), which silently
+    # turned failed pushes into successes in the 9.4.1 development cycle.
+    rc=0
+    net "$@" 2>"$errlog" || rc=$?
+    if [[ -s "$errlog" ]]; then
+        warn "git said:"
+        while IFS= read -r line; do warn "  $line"; done < <(sed -n '1,6p' "$errlog")
+    fi
+    return "$rc"
 }
 
 ##
@@ -1502,7 +1547,9 @@ ensure_credential_helper() {
         fi
     fi
     if git config --global credential.helper store 2>/dev/null; then
-        success "Credentials will be remembered from the next successful login (~/.git-credentials)"
+        touch "$HOME/.git-credentials" 2>/dev/null || :
+        chmod 600 "$HOME/.git-credentials" 2>/dev/null || :
+        success "Credentials will be remembered from the next successful login (~/.git-credentials, 0600)"
         warn "The store helper keeps credentials in PLAIN TEXT — protect your device and home directory"
     else
         warn "Could not enable credential storage — run: git config --global credential.helper store"
@@ -2147,7 +2194,7 @@ sync_run() {
     commit_changes "chore(sync)" || { sync_fail commit_failed "Could not commit local changes"; return 1; }
 
     step "Fetching remote state"
-    if ! net fetch --quiet origin 2>/dev/null; then
+    if ! net_quiet fetch --quiet origin; then
         error "Fetch failed — check network connection and credentials"
         cred_hint
         sync_fail fetch_failed "git fetch failed (network or credentials)"
@@ -2211,7 +2258,7 @@ sync_run() {
         local -a push_args=(origin "$BRANCH")
         remote_branch_exists || push_args=(-u origin "$BRANCH")
 
-        if net push --quiet "${push_args[@]}" 2>/dev/null; then
+        if net_quiet push --quiet "${push_args[@]}"; then
             SYNC_PUSHED=$ahead
             success "Pushed $ahead commit(s)"
         else
@@ -2286,7 +2333,7 @@ pull_run() {
     commit_changes "chore(pull)" || { sync_fail commit_failed "Could not commit local changes"; return 1; }
 
     step "Fetching remote state"
-    net fetch --quiet origin 2>/dev/null || { error "Fetch failed"; cred_hint; sync_fail fetch_failed "git fetch failed (network or credentials)"; return 1; }
+    net_quiet fetch --quiet origin || { error "Fetch failed"; cred_hint; sync_fail fetch_failed "git fetch failed (network or credentials)"; return 1; }
 
     if ! remote_branch_exists; then
         info "Remote branch '$BRANCH' not found — nothing to pull"
@@ -2392,7 +2439,7 @@ push_run() {
     local -a push_args=(origin "$BRANCH")
     remote_branch_exists || push_args=(-u origin "$BRANCH")
 
-    if net push --quiet "${push_args[@]}" 2>/dev/null; then
+    if net_quiet push --quiet "${push_args[@]}"; then
         SYNC_PUSHED=$ahead
         success "Pushed $ahead commit(s)"
         return 0
@@ -4847,7 +4894,7 @@ cmd_init() {
             || { error "Failed to configure remote"; return 1; }
 
         info "Fetching remote history"
-        if net fetch --quiet origin 2>/dev/null && remote_branch_exists; then
+        if net_quiet fetch --quiet origin && remote_branch_exists; then
             # Point the branch at the remote head; local edits simply show
             # up as pending changes for the next sync.
             if g reset --mixed "origin/$BRANCH" >/dev/null 2>&1; then
@@ -6194,6 +6241,9 @@ cmd_help() {
     OBS_GIT_TIMEOUT       Network git timeout in seconds (default: 120; 0 = none)
     OBS_LOCAL_TIMEOUT     Local watchdog (tar/hashing/fsck) in seconds
                           (default: 600; 0 = none)
+    OBS_NET_LOW_SPEED     HTTPS stall guard in bytes/s (default: 512; 0 = off)
+    OBS_NET_LOW_TIME      Seconds below the speed limit before aborting
+                          (default: 60)
     OBS_CRON_LOG          Output file for scheduled sync runs
                           (default: ~/ob-sync-cron.log)
     OBS_SKIP_BACKUP       Set to 1 to skip the pre-sync safety backup

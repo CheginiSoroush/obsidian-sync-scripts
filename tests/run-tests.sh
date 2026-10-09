@@ -1552,6 +1552,8 @@ git -C "$SB/vaultHttps" -c user.name=suite -c user.email=suite@local commit -qm 
 git -C "$SB/vaultHttps" remote add origin "https://127.0.0.1:1/repo.git"
 assertout "https failure shows the PAT/SSH hint" "Personal Access Token" \
     bash -c "${OB@Q} push -y 2>&1 || :"
+assertout "failure surfaces git's own stderr" "git said:" \
+    bash -c "${OB@Q} push -y 2>&1 || :"
 
 # 36f — cronie truncates a command at the first unescaped '%'; a '%' in
 # the log path used to silently break the scheduled sync.
