@@ -1742,8 +1742,14 @@ assert "38 no staging leftovers" \
 # The menu exposes Init (18) — first-time setup is no longer CLI-only.
 assert "menu lists 18) Init" \
     bash -c "printf '0\n' | env OBS_VAULT='$SB/vault38' '$OB' menu 2>&1 | grep -qF '18) Init'"
-assert "menu prompt offers 0-18" \
-    bash -c "grep -qF 'Select an option [0-18]: ' '$ROOT/bin/ob-sync'"
+assert "menu prompt offers 0-19" \
+    bash -c "grep -qF 'Select an option [0-19]: ' '$ROOT/bin/ob-sync'"
+assert "menu lists 19) Switch" \
+    bash -c "printf '0\n' | env OBS_VAULT='$SB/vault38' '$OB' menu 2>&1 | grep -qF '19) Switch'"
+# pick_vault_menu is a session-only, TTY-gated helper: piped stdin must
+# never surface the picker UI (cron and scripts stay silent).
+assert "menu picker silent on piped stdin" \
+    bash -c "! printf '0\n' | env OBS_VAULT='$SB/vault38' '$OB' menu 2>&1 | grep -q 'pick one for this session'"
 
 # Menu choice 18 routes to init: a NEW empty vault (no .git) with OBS_REMOTE
 # preset runs the non-interactive link flow and leaves a real repository.

@@ -387,7 +387,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.3.0"
+readonly VERSION="9.4.0"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -1473,6 +1473,41 @@ cred_hint() {
     [[ "$url" == https://* ]] || return 0
     warn "HTTPS remote: GitHub needs a Personal Access Token as the password, not your account password"
     warn "On mobile, SSH is easier:  ob-sync remote git@github.com:<user>/<repo>.git"
+}
+
+##
+# HTTPS remotes need somewhere to cache the GitHub Personal Access Token.
+# Termux ships git WITHOUT a configured credential helper, so every sync
+# re-prompts for username/password even though the same token was typed
+# minutes earlier (the #1 Termux field report). Offer the built-in
+# `store` helper once, during init, with explicit consent. SSH and other
+# non-HTTPS remotes return early; non-interactive runs (cron, scripts,
+# tests) stay completely silent — no output, no config writes.
+##
+ensure_credential_helper() {
+    local url helper reply
+    url=$(g remote get-url origin 2>/dev/null) || url="${REMOTE:-}"
+    [[ "$url" == https://* ]] || return 0
+    helper=$(g config --get-all credential.helper 2>/dev/null | tail -n 1) || :
+    [[ -n "$helper" ]] && return 0
+    (( ASSUME_YES )) || [[ -t 0 ]] || return 0
+    if (( ! ASSUME_YES )); then
+        printf '\n'
+        warn "HTTPS remote with no credential helper — git will ask for a username and password on EVERY sync"
+        warn "GitHub accepts only a Personal Access Token as the password, never the account password"
+        read -r -p "  Remember credentials after the next successful login? [Y/n]: " reply || :
+        if [[ "$reply" =~ ^[Nn]$ ]]; then
+            info "Skipped — enable later with: git config --global credential.helper store"
+            return 0
+        fi
+    fi
+    if git config --global credential.helper store 2>/dev/null; then
+        success "Credentials will be remembered from the next successful login (~/.git-credentials)"
+        warn "The store helper keeps credentials in PLAIN TEXT — protect your device and home directory"
+    else
+        warn "Could not enable credential storage — run: git config --global credential.helper store"
+    fi
+    return 0
 }
 
 ##
@@ -4791,6 +4826,11 @@ cmd_init() {
         info "Remote left as configured in the vault's 'origin'"
     fi
 
+    # HTTPS without a credential helper re-prompts for username/password
+    # on every sync (Termux ships git without one). Offer the built-in
+    # store helper once, here, before the first network operation.
+    ensure_credential_helper
+
     if [[ -d "$VAULT/.git" ]]; then
         info "Vault already has a git repository — applying configuration only"
     elif [[ -d "$VAULT" ]]; then
@@ -5881,6 +5921,104 @@ cmd_config() {
 # ═════════════════════════════════════════════════════════════════════════════
 
 ##
+# Session vault switcher for the interactive menu.
+#
+# The config file pins exactly one vault on purpose — cron, scripts and
+# Tasker shortcuts must always hit the same target. The side effect was
+# a menu locked to that vault forever, even with several vaults and a
+# separate remote each. This picker runs at menu launch and on option
+# 19): it lists the pinned vault plus every auto-discovered one, keeps
+# the pinned vault preselected, and — when the user picks a different
+# vault — re-wires the session to THAT vault's own 'origin' and branch,
+# so two vaults with two remotes can never cross-sync.
+#
+# Deliberately session-only: the config file is never rewritten here,
+# so scheduled syncs keep their pinned vault. Re-pin with init (18).
+#
+# @param $1 "force" — show the list even with a single vault (used by
+#            the explicit menu item; the startup call skips silently)
+##
+pick_vault_menu() {
+    [[ -t 0 ]] || return 0
+    local force=0
+    [[ "${1:-}" == "force" ]] && force=1
+
+    local -a cands=()
+    local -A seen=()
+    local cfg cur="" c picked tag reply default i b
+
+    # The pinned vault leads the list and stays the default choice.
+    cfg=$(config_get VAULT) || :
+    if [[ -n "$cfg" && -d "$cfg" ]]; then
+        cands+=("$cfg")
+        seen["$cfg"]=1
+        cur="$cfg"
+    fi
+    while IFS= read -r c; do
+        [[ -n "$c" ]] || continue
+        [[ -n "${seen[$c]:-}" ]] && continue
+        seen["$c"]=1
+        cands+=("$c")
+    done < <(discover_vaults)
+
+    if (( ${#cands[@]} == 0 )); then
+        (( force )) && warn "No vault found — set one up with 18) Init"
+        return 0
+    fi
+    if (( ${#cands[@]} == 1 )); then
+        (( force )) && info "Only one vault known: ${cands[0]}"
+        return 0
+    fi
+
+    warn "Multiple vaults available — pick one for this session:"
+    default=1
+    for i in "${!cands[@]}"; do
+        c="${cands[$i]}"
+        tag=""
+        if [[ "$c" == "$cur" ]]; then
+            tag="  ${C_DIM}(last used — press Enter to keep it)${C_RESET}"
+            default=$((i + 1))
+        fi
+        printf '    %s%d)%s %s%s\n' "$C_CYAN" "$((i + 1))" "$C_RESET" "$c" "$tag"
+    done
+    printf '\n'
+    read -r -p "  Select vault [${default}] (number or full path): " reply || :
+    reply="${reply:-$default}"
+
+    picked=""
+    if [[ -d "$reply" ]]; then
+        picked=$(cd "$reply" 2>/dev/null && pwd -P) || picked=""
+    elif [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#cands[@]} )); then
+        picked="${cands[reply - 1]}"
+    fi
+    if [[ -z "$picked" ]]; then
+        error "Invalid selection — keeping: $VAULT"
+        return 0
+    fi
+    [[ "$picked" == "$VAULT" ]] && return 0
+
+    VAULT="$picked"
+    VAULT_SOURCE="menu (this session)"
+
+    # Re-wire the session to this vault's own git metadata. The config
+    # REMOTE must NOT leak across vaults (remote_url prefers it) — two
+    # vaults with two separate remotes would otherwise cross-sync.
+    if [[ -z "${OBS_REMOTE:-}" ]]; then
+        REMOTE=$(g remote get-url origin 2>/dev/null) || REMOTE=""
+    fi
+    if [[ -z "${OBS_BRANCH:-}" ]]; then
+        b=$(g branch --show-current 2>/dev/null) || b=""
+        [[ -n "$b" ]] && BRANCH="$b"
+    fi
+
+    success "Vault switched for this session: $VAULT"
+    [[ -n "$REMOTE" ]] && info "Remote: $REMOTE"
+    warn "Session-only — cron keeps the pinned vault. Re-pin with 18) Init."
+    return 0
+}
+
+
+##
 # Draw the menu screen with a live status summary.
 ##
 show_menu() {
@@ -5928,6 +6066,7 @@ show_menu() {
     printf '  %s16)%s Cron      %sschedule automatic syncs%s\n'  "$C_BRIGHT_MAGENTA" "$C_RESET" "$C_DIM" "$C_RESET"
     printf '  %s17)%s EditConf  %sedit the config file%s\n'      "$C_BRIGHT_YELLOW"  "$C_RESET" "$C_DIM" "$C_RESET"
     printf '  %s18)%s Init      %snew vault / first-time setup%s\n' "$C_BRIGHT_CYAN"    "$C_RESET" "$C_DIM" "$C_RESET"
+    printf '  %s19)%s Switch    %spick another vault (session)%s\n' "$C_BRIGHT_YELLOW"  "$C_RESET" "$C_DIM" "$C_RESET"
     printf '  %s0)%s Exit     %squit the tool%s\n'                 "$C_BRIGHT_RED"     "$C_RESET" "$C_DIM" "$C_RESET"
     echo
     printf '  %s------------------------------------------%s\n' "$C_DIM" "$C_RESET"
@@ -5940,10 +6079,13 @@ show_menu() {
 # acquired and released around each individual operation.
 ##
 main_menu() {
+    # Session vault switcher (multi-vault support) — runs before the
+    # first screen so the menu always targets the vault the user meant.
+    pick_vault_menu
     while true; do
         show_menu
         local choice=""
-        read -r -p "  Select an option [0-18]: " choice || { echo; exit 0; }
+        read -r -p "  Select an option [0-19]: " choice || { echo; exit 0; }
 
         case "$choice" in
             1)  dispatch sync ;;
@@ -5964,6 +6106,7 @@ main_menu() {
             16) dispatch cron ;;
             17) dispatch edit-conf ;;
             18) dispatch init ;;
+            19) pick_vault_menu force ;;
             0)  echo; success "Goodbye!"; echo; exit 0 ;;
             *)  error "Invalid choice: $choice"; sleep 1; continue ;;
         esac

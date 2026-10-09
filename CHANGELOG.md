@@ -4,6 +4,33 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.4.0] — A menu that follows your vaults + credentials that stick
+
+Two field reports from daily Termux use drove this release: a second
+vault was unreachable from the menu (the config pins exactly one), and
+git kept demanding the GitHub token on every single sync even though it
+had been typed minutes earlier.
+
+### Added
+
+- **Session vault switcher** — the interactive menu now starts with a
+  vault picker whenever more than one vault is known (the pinned vault
+  plus everything auto-discovered), preselecting the last-used one.
+  New menu option **19) Switch** re-opens the picker at any time;
+  typing a full path selects vaults outside the scanned roots. Picking
+  a vault re-wires the session to THAT vault's own `origin` and branch,
+  so two vaults with two separate remotes can never cross-sync. The
+  choice is deliberately session-only: cron jobs, scripts and Tasker
+  shortcuts keep hitting the pinned vault until you re-pin with 18)
+  Init — the menu prompt now reads `Select an option [0-19]`.
+- **Credential helper bootstrap** — `init` now detects an HTTPS remote
+  with no configured git credential helper (Termux ships none) and
+  offers, with explicit consent, to enable the built-in `store` helper
+  so the GitHub Personal Access Token is typed once instead of on every
+  sync. SSH and other non-HTTPS remotes return early; non-interactive
+  runs (cron, scripts) stay completely silent — no output, no config
+  writes.
+
 ## [9.3.0] — Repair that tells the truth + Init joins the menu
 
 Field reports from Termux (a vault on Android shared storage whose
