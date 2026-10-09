@@ -4,6 +4,99 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.5.0] — The vault carries its own identity card
+
+Proposal-turned-feature from the same field report that produced 9.4.2:
+a vault that has never been connected is a mystery to every command that
+needs a remote, and the machine-wide config file is the wrong place to
+solve that — it describes the DEVICE, not the vault. So the vault now
+describes itself.
+
+### Added
+
+- **Vault identity card: `<vault>/.ob-sync/config`** — after `init` (or
+  `ob-sync remote <url>`) the vault's own REMOTE and BRANCH are written
+  into a small hidden file inside the vault, in the same KEY=VALUE format
+  as the machine config. It is a normal tracked file: the first sync
+  commits it, and from then on every clone already knows where it
+  belongs — on a second device, `init -y <clone>` and `sync` run without
+  asking a single remote question.
+- **Self-healing origin** — every locked operation (sync/pull/push/
+  quick/backup/restore/repair/init/remote) first re-aligns the vault's
+  `origin` with its identity card:
+  - `origin` missing → restored from the vault's OWN file (the exact
+    field-reported accident — a vault losing its remote — now heals
+    itself, and can never heal toward ANOTHER vault's repository).
+  - `origin` disagrees with the file → the file wins: it traveled with
+    the vault (pulled after a `remote set-url` elsewhere), so it
+    expresses the vault's intent; a stale local origin is re-pointed
+    with a printed notice.
+- **Silent migration** — a legacy vault that has an `origin` but no
+  identity card gains one from its own origin on the first locked run.
+  Nothing is asked; nothing changes hands.
+- **Honest refusal preserved** — a vault with NEITHER origin NOR
+  identity card is still refused by sync/quick/push/pull/repair with
+  `no_remote` (9.4.2 behavior); `init` remains the place that asks for
+  the URL — and now also writes the card.
+- **Visibility** — `status` shows an Identity row (human) and a
+  `vault_config` object (`--json`); `remote` displays the card next to
+  `origin`; `help` documents the new VAULT IDENTITY section.
+- **Safety properties** — writes happen ONLY under the lock (read-only
+  commands never mutate the vault); the card holds exactly REMOTE and
+  BRANCH — never credentials, never device paths; `OBS_REMOTE` still
+  outranks everything for the current run and is never rewired by the
+  card.
+- **Test suite: 28 new checks (section 40)** — identity written by init,
+  committed to the remote, present in clones, self-healing origin,
+  identity-over-stale-origin rebind, legacy migration, lockstep
+  `remote set-url`, honest refusal intact, minimal/credential-free
+  card, `status --json` shape, read-only purity.
+
+## [9.4.2] — The config remote stops crossing vault lines
+
+Field report: a user picked a vault that had never been connected to a
+remote, ran `repair`, then `quick` — and watched both commands happily
+work on a repository that was never chosen for that vault. Diagnosis:
+`repair` had cloned ANOTHER vault's repository, swapped its `.git` into
+the picked vault, restored the foreign notes, and `quick` then pushed
+the picked vault's notes into the foreign repository. Two vaults, one
+repo, both histories entangled — without a single confirmation.
+
+Root cause: the config file is machine-wide and stores ONE vault's
+remote, but `remote_url()`/`ensure_origin()` trusted it for whatever
+vault the session happened to be running (startup picker, menu 19,
+`OBS_VAULT`). Since 9.4.0 made multi-vault sessions a first-class flow,
+that trust became a cross-sync hazard.
+
+### Fixed
+
+- **Config REMOTE/BRANCH no longer cross vault lines** — a session is
+  now bound to its resolved vault (`bind_session_remote`, called at the
+  end of every `resolve_vault()` path and by the menu-19 switch):
+  precedence is `OBS_REMOTE` > the vault's own `origin` > config file,
+  and the config file is consulted only when the session vault IS the
+  config-pinned vault (`config_remote_trusted`). A vault without its own
+  remote now gets an honest "This vault has no remote configured" from
+  sync/quick/push/pull and "No remote repository configured" from
+  repair/init — never a silent clone of someone else's repository.
+- **`remote_url()` tells the push truth** — the vault's own `origin`
+  now outranks the config REMOTE (origin is what `git push` actually
+  targets); where they disagreed, `repair` cloned from the config value
+  while sync pushed to origin.
+- **Menu 19 switch warns** when the picked vault has no remote, naming
+  the exact commands that will refuse and how to connect one.
+- **Regression guarded both ways**: the legacy "restore a lost origin
+  from the config file" behavior still works for the pinned vault (the
+  documented post-`repair` path), while the same operation against a
+  different vault's session is refused.
+
+### Added
+
+- Test suite section 39: cross-vault contamination blocked (repair and
+  quick against a remote-less second vault leave the first vault's
+  repository untouched), pinned-vault origin restore still works, and
+  `remote` now reports the origin that would actually be pushed to.
+
 ## [9.4.1] — Network errors that speak, and stalls that end
 
 Field report: a Termux sync reached the push, "asked for the username",

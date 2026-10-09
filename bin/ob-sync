@@ -387,7 +387,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.4.1"
+readonly VERSION="9.5.0"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -522,14 +522,44 @@ config_set() {
 }
 
 ##
+# May the machine-wide config REMOTE/BRANCH be consulted for the CURRENT
+# session vault?
+#
+# The config file stores ONE vault's remote (written by `ob-sync init` /
+# `ob-sync remote` together with the pinned VAULT). Since 9.4.0 a session
+# can also run against a DIFFERENT vault (startup picker, menu 19,
+# OBS_VAULT) — letting the config REMOTE leak into such a session pointed
+# sync/quick/repair/init at ANOTHER vault's repository: repair swapped in
+# a foreign .git, quick pushed foreign notes into it, and the picked
+# vault's notes landed in someone else's history. Field-reported 9.4.1.
+#
+# Trusted only when the session vault IS the pinned vault, or when nothing
+# is pinned (single-vault machine — the stored remote necessarily belongs
+# to the only vault there is).
+# @return 0 trusted, 1 not trusted (config REMOTE/BRANCH must be ignored)
+##
+config_remote_trusted() {
+    local pinned
+    pinned=$(config_get VAULT) || :
+    [[ -z "$pinned" || "$pinned" == "$VAULT" ]]
+}
+
+##
 # Apply config-file fallbacks for settings the user did not export.
-# Environment always wins; the config file only fills the gaps. Runs in
-# setup() (normal commands) and cmd_doctor (which skips setup), so cron
-# jobs and non-login shells resolve REMOTE/BRANCH exactly like terminals.
+# Environment always wins; the config file only fills the gaps — and only
+# for the vault the config was written FOR (config_remote_trusted): a
+# session running another vault must keep REMOTE/BRANCH empty so that
+# remote_url()/ensure_origin() resolve that vault's OWN origin or refuse
+# with an actionable error, never reach for a foreign repository.
+# Runs in setup() (normal commands) and cmd_doctor (which skips setup),
+# so cron jobs and non-login shells resolve REMOTE/BRANCH exactly like
+# terminals.
 ##
 load_config_overrides() {
-    [[ -n "$REMOTE" ]] || REMOTE=$(config_get REMOTE) || :
-    if [[ -z "${OBS_BRANCH:-}" ]]; then
+    if [[ -z "$REMOTE" ]] && config_remote_trusted; then
+        REMOTE=$(config_get REMOTE) || :
+    fi
+    if [[ -z "${OBS_BRANCH:-}" ]] && config_remote_trusted; then
         local cfg_branch
         cfg_branch=$(config_get BRANCH) || :
         [[ -n "$cfg_branch" ]] && BRANCH="$cfg_branch"
@@ -573,6 +603,7 @@ resolve_vault() {
     if [[ -n "$VAULT" ]]; then
         VAULT_SOURCE="environment"
         [[ -d "$VAULT" ]] || warn "OBS_VAULT does not exist (yet): $VAULT"
+        bind_session_remote
         return 0
     fi
 
@@ -581,6 +612,7 @@ resolve_vault() {
         if [[ -d "$cfg" ]]; then
             VAULT="$cfg"
             VAULT_SOURCE="config file"
+            bind_session_remote
             return 0
         fi
         warn "Configured vault no longer exists: $cfg"
@@ -595,6 +627,7 @@ resolve_vault() {
         VAULT="${candidates[0]}"
         VAULT_SOURCE="auto-detected"
         info "Auto-detected vault: $VAULT"
+        bind_session_remote
         return 0
     fi
 
@@ -612,6 +645,7 @@ resolve_vault() {
             if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#candidates[@]} )); then
                 VAULT="${candidates[reply - 1]}"
                 VAULT_SOURCE="selected"
+                bind_session_remote
                 return 0
             fi
             error "Invalid selection"
@@ -624,6 +658,178 @@ resolve_vault() {
     # 5 — platform default.
     VAULT="$DEFAULT_VAULT"
     VAULT_SOURCE="default"
+    bind_session_remote
+    return 0
+}
+
+##
+# Bind the session's remote and branch to the RESOLVED vault. Called at
+# every successful end of resolve_vault() (and by the menu-19 vault
+# switch), so $REMOTE/$BRANCH always describe THIS vault — never a value
+# left over from another one.
+#
+# Why this exists: the config file is machine-wide and stores one vault's
+# remote. Before 9.4.2 a session running a different vault (startup
+# picker, menu 19, OBS_VAULT) inherited that stored remote — repair
+# cloned it, quick pushed into it, and the picked vault's notes landed in
+# ANOTHER vault's repository (field-reported 9.4.1). The binding order:
+#   OBS_REMOTE env  >  the vault's own origin  >  the vault's own
+#   .ob-sync/config (9.5.0)  >  config file (only when the session vault
+#   is the config-pinned vault, see config_remote_trusted).
+# Silent by design: runs inside cron and --json paths.
+##
+bind_session_remote() {
+    if [[ -z "${OBS_REMOTE:-}" ]]; then
+        REMOTE=$(g remote get-url origin 2>/dev/null) || REMOTE=""
+        if [[ -z "$REMOTE" ]]; then
+            # The vault's own identity card — it belongs to THIS vault and
+            # can never describe another one (unlike the machine config).
+            REMOTE=$(vault_conf_get REMOTE) || REMOTE=""
+        fi
+        if [[ -z "$REMOTE" ]] && config_remote_trusted; then
+            REMOTE=$(config_get REMOTE) || :
+        fi
+    fi
+    if [[ -z "${OBS_BRANCH:-}" ]]; then
+        local b
+        b=$(g branch --show-current 2>/dev/null) || b=""
+        if [[ -n "$b" ]]; then
+            BRANCH="$b"
+        elif config_remote_trusted; then
+            b=$(config_get BRANCH) || :
+            [[ -n "$b" ]] && BRANCH="$b"
+        fi
+    fi
+    return 0
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  2b. VAULT IDENTITY — <vault>/.ob-sync/config
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# The machine-wide config file (~/.config/ob-sync/config) describes THIS
+# DEVICE: which vault is pinned, where backups live. The remote, however,
+# belongs to the VAULT — so since 9.5.0 it also lives inside the vault in
+# .ob-sync/config and travels with every push and clone. A vault cloned
+# on a new device already knows where it belongs; a vault whose .git lost
+# its origin restores it from its OWN file — never from another vault's
+# machine-config entry (the 9.4.2 class of cross-vault leaks becomes
+# structurally impossible on this path).
+#
+# Contents: REMOTE + BRANCH, same KEY=VALUE format as the machine config.
+# NEVER credentials — those belong in git's credential helper.
+#
+# Lifecycle:
+#   · init / remote <url>     — write the file, kept in lockstep with
+#                               the vault's 'origin'
+#   · first LOCKED run        — a legacy vault without the file gets it
+#                               written from its own origin (migration)
+#   · every LOCKED run        — origin is re-aligned with the file when
+#                               they disagree: the file traveled with the
+#                               vault, so it expresses the vault's intent
+#   · both missing            — nothing is invented; sync/quick/repair
+#                               refuse honestly (9.4.2 behavior) and
+#                               `init` asks for the URL, then writes it
+#
+# Writes happen ONLY under the lock (ALLOW_VAULT_CONF=1, set by with_lock
+# and the menu switcher) — read-only commands never mutate the vault.
+
+ALLOW_VAULT_CONF=0
+
+vault_conf_path() {
+    printf '%s/.ob-sync/config' "$VAULT"
+}
+
+##
+# Read a KEY=VALUE pair from the vault-local identity file (same parser
+# rules as config_get). Pure read — safe in any command.
+# @return 1 when the file or key is absent
+##
+vault_conf_get() {
+    local f
+    f=$(vault_conf_path)
+    [[ -r "$f" ]] || return 1
+    local key="$1" line
+    while IFS= read -r line; do
+        case "$line" in
+            ''|'#'*) continue ;;
+            "$key="*) printf '%s\n' "${line#"$key="}"; return 0 ;;
+        esac
+    done < "$f"
+    return 1
+}
+
+##
+# Write REMOTE/BRANCH into <vault>/.ob-sync/config. Idempotent (identical
+# content is never rewritten, so the vault never shows phantom changes)
+# and best-effort (a read-only vault must never break a sync).
+##
+vault_conf_write() {
+    [[ "$ALLOW_VAULT_CONF" == 1 ]] || return 0
+    [[ -d "$VAULT/.git" && -n "$REMOTE" ]] || return 0
+    local cur cur_branch f tmp
+    f=$(vault_conf_path)
+    cur=$(vault_conf_get REMOTE)        || cur=""
+    cur_branch=$(vault_conf_get BRANCH) || cur_branch=""
+    [[ "$cur" == "$REMOTE" && "$cur_branch" == "$BRANCH" ]] && return 0
+    if ! mkdir -p "$VAULT/.ob-sync" 2>/dev/null; then
+        (( SILENT_UI )) || warn "Cannot create $VAULT/.ob-sync — vault identity not saved"
+        return 0
+    fi
+    tmp=$(mktemp "$VAULT/.ob-sync/config.XXXXXX") || return 0
+    {
+        printf '# ob-sync vault identity — committed with the vault.\n'
+        printf '# Every clone of this repository already knows where it belongs.\n'
+        printf '# Device-specific settings (pinned vault path, backups) live in\n'
+        printf '# %s and must NEVER be written here.\n' "$CONFIG_FILE"
+        printf '# Credentials never belong in this file.\n'
+        printf 'REMOTE=%s\n' "$REMOTE"
+        printf 'BRANCH=%s\n' "$BRANCH"
+    } > "$tmp" && mv -f "$tmp" "$f" || {
+        rm -f "$tmp"
+        (( SILENT_UI )) || warn "Cannot write $f — vault identity not saved"
+        return 0
+    }
+    (( SILENT_UI )) || success "Vault identity saved: .ob-sync/config (travels with the vault)"
+    return 0
+}
+
+##
+# Re-align the session and the vault's 'origin' with the vault-local
+# identity file. Called by with_lock (under the lock) and by the menu
+# vault switch — never by read-only commands.
+##
+vault_conf_reconcile() {
+    (( ALLOW_VAULT_CONF )) || return 0
+    [[ -n "$VAULT" && -d "$VAULT/.git" ]] || return 0
+    command -v git >/dev/null 2>&1 || return 0
+    # An explicit OBS_REMOTE is an operator decision for THIS run — the
+    # vault file must never silently rewire it.
+    [[ -n "${OBS_REMOTE:-}" ]] && return 0
+
+    local v_remote origin
+    v_remote=$(vault_conf_get REMOTE) || v_remote=""
+    origin=$(g remote get-url origin 2>/dev/null) || origin=""
+
+    if [[ -n "$v_remote" ]]; then
+        if [[ -z "$origin" ]]; then
+            # Bootstrap: the vault's own file restores its own remote.
+            if g remote add origin "$v_remote" >/dev/null 2>&1; then
+                success "Origin restored from the vault's own .ob-sync/config: $v_remote"
+            fi
+        elif [[ "$origin" != "$v_remote" ]]; then
+            # The file traveled with the vault (pulled after a
+            # `remote set-url` on another device) — it expresses the
+            # vault's intent and wins over a stale local origin.
+            if g remote set-url origin "$v_remote" >/dev/null 2>&1; then
+                info "Vault identity points to $v_remote — origin updated to match"
+            fi
+        fi
+        REMOTE="$v_remote"
+    elif [[ -n "$origin" ]]; then
+        REMOTE="$origin"
+    fi
+    vault_conf_write
     return 0
 }
 
@@ -1059,6 +1265,12 @@ with_lock() {
         fi
         return 2
     fi
+
+    # The vault's own identity card is authoritative for THIS vault:
+    # re-align 'origin' with <vault>/.ob-sync/config before any data
+    # operation (writes are serialized by the very lock we hold).
+    ALLOW_VAULT_CONF=1
+    vault_conf_reconcile
 
     "$@"   # fn + its args, exactly as dispatch forwarded them
     local rc=$?
@@ -1558,41 +1770,67 @@ ensure_credential_helper() {
 }
 
 ##
-# Resolve the remote URL. Precedence: OBS_REMOTE environment > config file
-# > the vault's own 'origin'. Empty when nothing is configured anywhere —
-# callers must handle that with an actionable message.
+# Resolve the remote URL. Precedence: OBS_REMOTE environment > the vault's
+# own 'origin' > the vault's own .ob-sync/config (9.5.0) > config file
+# (only when config_remote_trusted).
+#
+# Since 9.4.2 the vault's own origin outranks the config file: origin is
+# what `git push` actually targets, and the config REMOTE is machine-wide
+# — it belongs to whichever vault was last init-ed, so trusting it for a
+# session that runs a different vault cloned/pushed the WRONG repository
+# (field-reported 9.4.1). Where origin and config disagree, origin is the
+# per-vault truth. Empty when nothing is configured anywhere — callers
+# must handle that with an actionable message.
 # @stdout  the URL (empty output when unset)
 ##
 remote_url() {
-    [[ -n "$REMOTE" ]] || REMOTE=$(config_get REMOTE) || :
+    if [[ -z "$REMOTE" ]]; then
+        REMOTE=$(g remote get-url origin 2>/dev/null) || REMOTE=""
+    fi
+    if [[ -z "$REMOTE" ]]; then
+        REMOTE=$(vault_conf_get REMOTE) || REMOTE=""
+    fi
+    if [[ -z "$REMOTE" ]] && config_remote_trusted; then
+        REMOTE=$(config_get REMOTE) || :
+    fi
     if [[ -n "$REMOTE" ]]; then
         printf '%s\n' "$REMOTE"
-        return 0
     fi
-    g remote get-url origin 2>/dev/null
     return 0
 }
 
 ##
 # Ensure a remote named 'origin' is configured. When the URL is known
-# (environment or config file) a missing 'origin' is repaired on the spot;
-# otherwise a clear, actionable message replaces git's cryptic
-# "'origin' does not appear to be a git repository" later in the flow.
+# (environment, the vault's own .ob-sync/config, or the config file FOR
+# THIS VAULT) a missing 'origin' is repaired on the spot; otherwise a
+# clear, actionable message replaces git's cryptic "'origin' does not
+# appear to be a git repository" later in the flow.
+#
+# The config fallback only fires when config_remote_trusted: restoring
+# ANOTHER vault's repository as origin here is exactly how a session
+# switched to a remote-less vault ended up pushing into a foreign repo
+# (field-reported 9.4.1). Untrusted sessions get an honest error instead.
 ##
 ensure_origin() {
     if g remote get-url origin >/dev/null 2>&1; then
         return 0
     fi
-    [[ -n "$REMOTE" ]] || REMOTE=$(config_get REMOTE) || :
+    if [[ -z "$REMOTE" ]]; then
+        REMOTE=$(vault_conf_get REMOTE) || REMOTE=""
+    fi
+    if [[ -z "$REMOTE" ]] && config_remote_trusted; then
+        REMOTE=$(config_get REMOTE) || :
+    fi
     if [[ -n "$REMOTE" ]]; then
         if g remote add origin "$REMOTE" >/dev/null 2>&1; then
             success "Remote 'origin' restored: $REMOTE"
+            vault_conf_write
             return 0
         fi
         error "Failed to add remote 'origin'"
         return 1
     fi
-    error "Remote 'origin' is not configured"
+    error "This vault has no remote configured: $VAULT"
     warn "Fix: ob-sync remote <url>  (or re-run: ob-sync init)"
     return 1
 }
@@ -3569,6 +3807,11 @@ cmd_status() {
     if (( has_git )) && [[ -d "$VAULT/.git" ]]; then
         kv "Branch" "$(g branch --show-current 2>/dev/null || printf 'unknown')"
         kv "Remote" "$(g remote get-url origin 2>/dev/null || printf 'not configured')"
+        if [[ -r "$VAULT/.ob-sync/config" ]]; then
+            kv "Identity" ".ob-sync/config ${C_DIM}(travels with the vault)${C_RESET}"
+        else
+            kv "Identity" "none ${C_DIM}(written on the next sync)${C_RESET}"
+        fi
         kv "Changes" "$(g status --porcelain 2>/dev/null | wc -l | tr -d ' ') file(s)"
         kv "Last commit" "$(g log -1 --format='%h %s (%cr)' 2>/dev/null || printf 'none')"
 
@@ -3743,6 +3986,15 @@ cmd_status_json() {
         "$(json_escape "$CONFIG_FILE")" \
         "$([[ -r "$CONFIG_FILE" ]] && printf true || printf false)" \
         "$(json_escape "$VAULT_SOURCE")"
+    # The vault's own identity card (9.5.0): pure read, no filesystem writes.
+    local vc_present="false" vc_remote=""
+    [[ -r "$VAULT/.ob-sync/config" ]] && vc_present="true"
+    if (( repo )); then
+        vc_remote=$(vault_conf_get REMOTE 2>/dev/null) || vc_remote=""
+    fi
+    printf '  "vault_config": { "path": "%s", "present": %s, "remote": %s },\n' \
+        "$(json_escape "$VAULT/.ob-sync/config")" "$vc_present" \
+        "$([[ -n "$vc_remote" ]] && printf '"%s"' "$(json_escape "$vc_remote")" || printf null)"
     printf '  "last_sync": %s\n' "$last_sync"
     printf '}\n'
 }
@@ -4830,6 +5082,18 @@ cmd_init() {
             if [[ -d "$reply" ]]; then
                 VAULT=$(cd "$reply" && pwd -P)
                 info "Vault: $VAULT"
+                # The operator re-pointed init at a DIFFERENT vault: the
+                # session's REMOTE/BRANCH may still describe the previous
+                # one (seeded from the config file, which belongs to the
+                # pinned vault). Carrying them over would link this vault
+                # to another vault's repository — re-derive from THIS
+                # vault's own origin; the config file is re-consulted by
+                # the binder only when this vault is the pinned one.
+                if [[ -z "${OBS_REMOTE:-}" ]]; then
+                    REMOTE=""
+                    [[ -z "${OBS_BRANCH:-}" ]] && BRANCH="main"
+                    bind_session_remote
+                fi
             else
                 error "No such directory: $reply"
                 return 1
@@ -4955,6 +5219,12 @@ cmd_init() {
     ensure_identity
     success "Configuration applied"
 
+    # The identity card is the 9.5.0 answer to "clone and go": the vault's
+    # own remote/branch live inside the vault and travel to every clone.
+    step "Saving the vault identity"
+    ALLOW_VAULT_CONF=1
+    vault_conf_write
+
     step "Installing recommended .gitignore"
     if [[ -f "$VAULT/.gitignore" ]]; then
         info ".gitignore already exists — left untouched"
@@ -4985,6 +5255,7 @@ EOF
     kv "Vault" "$VAULT"
     kv "Remote" "$REMOTE"
     kv "Branch" "$BRANCH"
+    kv "Identity" "$VAULT/.ob-sync/config ${C_DIM}(committed with the vault)${C_RESET}"
     echo
     info "Next step: ob-sync sync"
     log "Initialization complete"
@@ -5163,6 +5434,11 @@ cmd_remote() {
         if command -v git >/dev/null 2>&1 && [[ -d "$VAULT/.git" ]]; then
             kv "Origin" "$(g remote get-url origin 2>/dev/null || printf 'not set')"
         fi
+        if [[ -r "$VAULT/.ob-sync/config" ]]; then
+            local vid
+            vid=$(vault_conf_get REMOTE 2>/dev/null || printf 'unset')
+            kv "Vault identity" ".ob-sync/config → $vid"
+        fi
         if [[ -z "$current" ]]; then
             echo
             info "Set one with: ob-sync remote <url>"
@@ -5189,6 +5465,10 @@ cmd_remote() {
         fi
         success "Vault 'origin' updated"
     fi
+
+    # Keep the vault's identity card in lockstep with origin — it is the
+    # copy that travels to every other device.
+    vault_conf_write
 
     info "Next: ob-sync init links the vault, then ob-sync sync"
     return 0
@@ -5992,7 +6272,7 @@ pick_vault_menu() {
 
     local -a cands=()
     local -A seen=()
-    local cfg cur="" c picked tag reply default i b
+    local cfg cur="" c picked tag reply default i
 
     # The pinned vault leads the list and stays the default choice.
     cfg=$(config_get VAULT) || :
@@ -6047,19 +6327,29 @@ pick_vault_menu() {
     VAULT="$picked"
     VAULT_SOURCE="menu (this session)"
 
-    # Re-wire the session to this vault's own git metadata. The config
-    # REMOTE must NOT leak across vaults (remote_url prefers it) — two
-    # vaults with two separate remotes would otherwise cross-sync.
-    if [[ -z "${OBS_REMOTE:-}" ]]; then
-        REMOTE=$(g remote get-url origin 2>/dev/null) || REMOTE=""
-    fi
-    if [[ -z "${OBS_BRANCH:-}" ]]; then
-        b=$(g branch --show-current 2>/dev/null) || b=""
-        [[ -n "$b" ]] && BRANCH="$b"
-    fi
+    # Re-bind the session to this vault's own git metadata. The config
+    # REMOTE/BRANCH belong to the pinned vault and must NOT leak across
+    # vaults — two vaults with two separate remotes would otherwise
+    # cross-sync (repair would clone the foreign repo, quick would push
+    # into it). bind_session_remote resolves THIS vault's origin and only
+    # falls back to the config file when this vault is the pinned one.
+    bind_session_remote
+    # The freshly picked vault may carry its own identity card
+    # (.ob-sync/config): align origin with it right away, so the remote
+    # line below and every command dispatched from this menu session see
+    # the vault's OWN remote — never another vault's.
+    ALLOW_VAULT_CONF=1
+    vault_conf_reconcile
 
     success "Vault switched for this session: $VAULT"
-    [[ -n "$REMOTE" ]] && info "Remote: $REMOTE"
+    local eff_remote
+    eff_remote=$(remote_url 2>/dev/null) || eff_remote=""
+    if [[ -z "$eff_remote" ]]; then
+        warn "This vault has no remote yet — sync/quick/repair will refuse until one is connected"
+        warn "Connect it with: ob-sync remote <url>   (or 18) Init)"
+    else
+        info "Remote: $eff_remote"
+    fi
     warn "Session-only — cron keeps the pinned vault. Re-pin with 18) Init."
     return 0
 }
@@ -6210,6 +6500,7 @@ cmd_help() {
                           watchdog (--json for a machine-readable report)
     init                  First-time setup: clone or adopt an existing vault
     remote [url]          Show the remote URL, or set and persist a new one
+                          (origin and the vault's .ob-sync/config stay in sync)
     cron [sub]            Scheduled syncs: status (default), install <sched>
                           [HH:MM], show, uninstall
     edit-conf             Edit the config file in \$EDITOR (starter created)
@@ -6248,6 +6539,18 @@ cmd_help() {
                           (default: ~/ob-sync-cron.log)
     OBS_SKIP_BACKUP       Set to 1 to skip the pre-sync safety backup
     OBS_ATTACH_DIR        Destination folder for 'organize --fix' (default: Attachments)
+
+  VAULT IDENTITY
+    <vault>/.ob-sync/config   The vault's own identity card (REMOTE, BRANCH).
+                          Written by init/remote, committed with the vault,
+                          and traveling to every clone — a new device is
+                          ready to run without re-asking for the remote.
+                          A lost 'origin' is restored from it, and on
+                          disagreement the file (the copy that traveled
+                          with the vault) wins over a stale local origin.
+                          Device settings (pinned path, backups) stay in
+                          OBS_CONFIG and never travel; credentials never
+                          belong in this file.
 
   EXAMPLES
     ob-sync               Open the interactive menu

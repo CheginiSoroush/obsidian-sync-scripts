@@ -473,7 +473,11 @@ t "sync --bogus -> rc=1" 1 "$OB" sync --bogus
 echo "== 24. sync --json failure documents =="
 # fetch_failed: origin points at a nonexistent repository — the document
 # must carry result=error with a stable machine code, and rc must stay 1.
+# 9.5.0: the vault identity card is authoritative, so the simulated
+# outage must cover BOTH origin and .ob-sync/config — otherwise the
+# reconciliation would legitimately heal the vault instead of failing.
 git -C "$SB/vault1" remote set-url origin "$SB/no-such-remote.git"
+printf 'REMOTE=%s\nBRANCH=main\n' "$SB/no-such-remote.git" > "$SB/vault1/.ob-sync/config"
 "$OB" sync --json >"$SB/out.txt" 2>/dev/null
 rc=$?
 if (( rc == 1 )) && grep -q '"result": "error"' "$SB/out.txt" \
@@ -484,6 +488,7 @@ else
     tail -5 "$SB/out.txt" | sed 's/^/         /'
 fi
 git -C "$SB/vault1" remote set-url origin "$SB/remote.git"
+printf 'REMOTE=%s\nBRANCH=main\n' "$SB/remote.git" > "$SB/vault1/.ob-sync/config"
 
 if command -v python3 >/dev/null 2>&1; then
     # conflict: two devices edit the same file; the loser's sync must
@@ -608,7 +613,9 @@ fi
 if command -v python3 >/dev/null 2>&1; then
     # push_failed: unreachable remote WITH something to push — the commit
     # succeeds, the push fails, the document must say push_failed.
+    # 9.5.0: cover the identity card too (see section 24 note).
     git -C "$SB/vault1" remote set-url origin "$SB/no-such-remote.git"
+    printf 'REMOTE=%s\nBRANCH=main\n' "$SB/no-such-remote.git" > "$SB/vault1/.ob-sync/config"
     printf 'push-fail change\n' >> "$SB/vault1/note1.md"
     "$OB" push --json >"$SB/out.txt" 2>/dev/null
     rc=$?
@@ -619,6 +626,7 @@ if command -v python3 >/dev/null 2>&1; then
         tail -5 "$SB/out.txt" | sed 's/^/         /'
     fi
     git -C "$SB/vault1" remote set-url origin "$SB/remote.git"
+    printf 'REMOTE=%s\nBRANCH=main\n' "$SB/remote.git" > "$SB/vault1/.ob-sync/config"
     git -C "$SB/vault1" reset --hard origin/main >/dev/null 2>&1
     t "vault1 recovers (push-fail cleanup)" 0 "$OB" sync -y
 
@@ -626,6 +634,7 @@ if command -v python3 >/dev/null 2>&1; then
     # sync part fails — the document must carry both (backup non-null AND
     # result=error). This is the shape that proves the 8.8.0 quick fix.
     git -C "$SB/vault1" remote set-url origin "$SB/no-such-remote.git"
+    printf 'REMOTE=%s\nBRANCH=main\n' "$SB/no-such-remote.git" > "$SB/vault1/.ob-sync/config"
     printf 'quick-fail change\n' >> "$SB/vault1/note1.md"
     "$OB" quick --json >"$SB/out.txt" 2>/dev/null
     rc=$?
@@ -637,6 +646,7 @@ if command -v python3 >/dev/null 2>&1; then
         tail -5 "$SB/out.txt" | sed 's/^/         /'
     fi
     git -C "$SB/vault1" remote set-url origin "$SB/remote.git"
+    printf 'REMOTE=%s\nBRANCH=main\n' "$SB/remote.git" > "$SB/vault1/.ob-sync/config"
     git -C "$SB/vault1" reset --hard origin/main >/dev/null 2>&1
     t "vault1 recovers (quick-fail cleanup)" 0 "$OB" sync -y
 
@@ -1761,6 +1771,181 @@ assert "menu choice 18 dispatches init" \
     bash -c "printf '18\n0\n' | env OBS_VAULT='$SB/vault38b' OBS_REMOTE='$SB/remote38.git' '$OB' menu >/dev/null 2>&1"
 assert "38 menu-init created a repository" test -d "$SB/vault38b/.git"
 t "38 menu-init vault is healthy" 0 env OBS_VAULT="$SB/vault38b" "$OB" health
+
+echo "== 39. v9.4.2: session remote trust (config REMOTE never crosses vaults) =="
+# Field-reported 9.4.1: a vault with NO remote was picked in a session
+# (menu 19 / startup picker), then repair + quick ran — and worked on the
+# PINNED vault's repository: repair cloned it and swapped the foreign
+# .git into the picked vault, quick pushed the picked vault's notes into
+# it. The config file REMOTE must never serve a session running a
+# different vault.
+
+# Deterministic pinned state, exactly as `init` writes it.
+printf 'VAULT=%s\nREMOTE=%s\nBRANCH=main\n' "$SB/vault1" "$SB/remote.git" > "$SB/config"
+
+# A second vault: notes, its own local repository, NO origin, NO remote.
+mkdir -p "$SB/vault39/.obsidian"
+printf '# lonely note\n' > "$SB/vault39/lonely.md"
+git -C "$SB/vault39" init -q
+git -C "$SB/vault39" add -A
+git -C "$SB/vault39" commit -qm "local only, never connected"
+
+# Snapshot the pinned vault's remote state before the attempts.
+git -C "$SB/remote.git" for-each-ref > "$SB/refs-before.txt"
+git -C "$SB/vault1" rev-parse HEAD > "$SB/v1-head-before.txt"
+
+# repair on the remote-less vault must refuse cleanly.
+t "39 repair refuses (no remote on this vault)" 1 \
+    env -u OBS_REMOTE OBS_VAULT="$SB/vault39" "$OB" repair -y
+grep -q "No remote repository configured" "$SB/out.txt" \
+    && { PASS=$((PASS + 1)); printf '  [ OK ] 39 repair names the missing remote\n'; } \
+    || { FAIL=$((FAIL + 1)); printf '  [FAIL] 39 repair names the missing remote\n'; tail -3 "$SB/out.txt" | sed 's/^/         /'; }
+
+# quick (backup + sync) must fail at the origin guard, code no_remote.
+if env -u OBS_REMOTE OBS_VAULT="$SB/vault39" "$OB" quick --json >"$SB/out.txt" 2>&1; then
+    FAIL=$((FAIL + 1)); printf '  [FAIL] 39 quick --json must fail\n'
+else
+    PASS=$((PASS + 1)); printf '  [ OK ] 39 quick --json fails with rc!=0\n'
+fi
+grep -q '"code": *"no_remote"' "$SB/out.txt" \
+    && { PASS=$((PASS + 1)); printf '  [ OK ] 39 quick --json code=no_remote\n'; } \
+    || { FAIL=$((FAIL + 1)); printf '  [FAIL] 39 quick --json code=no_remote\n'; tail -3 "$SB/out.txt" | sed 's/^/         /'; }
+
+# THE contamination assertions: the foreign repository and vault are
+# untouched, the remote-less vault gained no origin and no foreign notes.
+git -C "$SB/remote.git" for-each-ref > "$SB/refs-after.txt"
+assert "39 foreign repo untouched (no new refs)" \
+    diff -q "$SB/refs-before.txt" "$SB/refs-after.txt"
+assert "39 remote-less vault gained no origin" \
+    bash -c "! grep -q 'remote' '$SB/vault39/.git/config'"
+assert "39 no foreign notes materialized" \
+    bash -c "! test -e '$SB/vault39/note1.md'"
+git -C "$SB/vault1" rev-parse HEAD > "$SB/v1-head-after.txt"
+assert "39 pinned vault HEAD untouched" \
+    diff -q "$SB/v1-head-before.txt" "$SB/v1-head-after.txt"
+
+# `remote` (no args) must NOT leak the config REMOTE into this session.
+assertout "39 remote shows none for foreign session" \
+    "none" env -u OBS_REMOTE OBS_VAULT="$SB/vault39" "$OB" remote
+
+# Legacy behavior guarded: the PINNED vault that lost its origin still
+# gets it restored — since 9.5.0 primarily from its own identity card
+# (.ob-sync/config), with the machine config as the legacy fallback.
+git -C "$SB/vault1" remote remove origin
+t "39 sync on pinned vault restores origin" 0 \
+    env -u OBS_REMOTE OBS_VAULT="$SB/vault1" "$OB" sync -y
+assert "39 origin restored for pinned vault" \
+    bash -c "git -C '$SB/vault1' remote get-url origin >/dev/null 2>&1"
+
+# 9.5.0 precedence inside a 9.4.2 scenario: the vault's own identity card
+# outranks a hand-edited origin — the file traveled with the vault, so it
+# expresses the vault's intent (a raw `git remote set-url` is reverted).
+git -C "$SB/vault1" remote set-url origin "$SB/remote39-alt.git"
+assertout "39 vault identity overrides a hand-edited origin" \
+    "Origin:.*remote\.git" env -u OBS_REMOTE OBS_VAULT="$SB/vault1" "$OB" remote
+
+echo "== 40. v9.5.0: the vault carries its own identity (.ob-sync/config) =="
+# A vault that has never been connected is a mystery to every remote
+# command; the machine-wide config describes the DEVICE, not the vault.
+# Since 9.5.0 the vault describes itself: init writes .ob-sync/config
+# (REMOTE + BRANCH), the first sync commits it, and every clone arrives
+# pre-configured. A lost origin is restored from the vault's OWN file —
+# never from another vault's machine-config entry (9.4.2 class of bugs
+# becomes structurally impossible on this path).
+
+# 40a — init writes the identity card; the first sync commits it.
+git init -q --bare "$SB/remote40.git"
+mkdir -p "$SB/vault40"
+printf '# identity note\n' > "$SB/vault40/note40.md"
+t "40 init writes the vault identity" 0 \
+    env OBS_REMOTE="$SB/remote40.git" OBS_VAULT="$SB/vault40" "$OB" init -y
+assert "40 identity file exists" test -r "$SB/vault40/.ob-sync/config"
+assert "40 identity carries the remote" \
+    bash -c "grep -F 'REMOTE=$SB/remote40.git' '$SB/vault40/.ob-sync/config'"
+t "40 first sync commits the identity" 0 \
+    env OBS_REMOTE="$SB/remote40.git" OBS_VAULT="$SB/vault40" "$OB" sync -y
+assert "40 identity reached the remote" \
+    bash -c "git -C '$SB/remote40.git' ls-tree -r --name-only refs/heads/main 2>/dev/null | grep -qF '.ob-sync/config'"
+
+# 40b — a second device clones: the identity arrives inside the vault;
+# sync works immediately, no remote questions asked.
+t "40 second device clones via init" 0 \
+    env OBS_REMOTE="$SB/remote40.git" OBS_VAULT="$SB/vault40b" "$OB" init -y
+assert "40 clone already carries the identity" test -r "$SB/vault40b/.ob-sync/config"
+t "40 second device syncs without errors" 0 \
+    env -u OBS_REMOTE OBS_VAULT="$SB/vault40b" "$OB" sync -y
+
+# 40c — self-heal: a lost 'origin' is restored from the vault's OWN file
+# (the field-reported 9.4.1 accident, now impossible to cross vault lines).
+git -C "$SB/vault40b" remote remove origin
+t "40 sync restores origin from the identity" 0 \
+    env -u OBS_REMOTE OBS_VAULT="$SB/vault40b" "$OB" sync -y
+assert "40 origin restored and correct" \
+    bash -c "git -C '$SB/vault40b' remote get-url origin 2>/dev/null | grep -F '$SB/remote40.git'"
+
+# 40d — the identity wins over a stale origin: it traveled with the vault.
+git init -q --bare "$SB/remote40-alt.git"
+printf 'REMOTE=%s\nBRANCH=main\n' "$SB/remote40-alt.git" > "$SB/vault40b/.ob-sync/config"
+t "40 sync follows the identity to its remote" 0 \
+    env -u OBS_REMOTE OBS_VAULT="$SB/vault40b" "$OB" sync -y
+assert "40 origin re-pointed to the identity remote" \
+    bash -c "git -C '$SB/vault40b' remote get-url origin 2>/dev/null | grep -F '$SB/remote40-alt.git'"
+assert "40 the new remote received the vault" \
+    bash -c "git -C '$SB/remote40-alt.git' ls-tree -r --name-only refs/heads/main 2>/dev/null | grep -qF 'note40.md'"
+
+# 40e — migration: a legacy vault (origin, no identity) gains the card on
+# its first locked run — silently, from its own origin.
+git init -q --bare "$SB/remote40c.git"
+mkdir -p "$SB/vault40c"
+printf '# legacy vault\n' > "$SB/vault40c/legacy.md"
+git -C "$SB/vault40c" init -q
+git -C "$SB/vault40c" remote add origin "$SB/remote40c.git"
+t "40 legacy vault first sync" 0 \
+    env -u OBS_REMOTE OBS_VAULT="$SB/vault40c" "$OB" sync -y
+assert "40 legacy vault migrated to .ob-sync" test -r "$SB/vault40c/.ob-sync/config"
+assert "40 migration recorded the origin" \
+    bash -c "grep -F 'REMOTE=$SB/remote40c.git' '$SB/vault40c/.ob-sync/config'"
+
+# 40f — `ob-sync remote <url>` keeps origin and the identity in lockstep.
+git init -q --bare "$SB/remote40d.git"
+t "40 remote set-url succeeds" 0 env OBS_VAULT="$SB/vault40c" "$OB" remote "$SB/remote40d.git"
+assert "40 remote set-url updates the identity" \
+    bash -c "grep -F 'REMOTE=$SB/remote40d.git' '$SB/vault40c/.ob-sync/config'"
+assert "40 origin matches the identity" \
+    bash -c "git -C '$SB/vault40c' remote get-url origin 2>/dev/null | grep -F '$SB/remote40d.git'"
+
+# 40g — a vault with NEITHER origin NOR identity still refuses honestly
+# (9.4.2 behavior intact) and never gains an invented identity.
+t "40 remote-less vault still refuses" 1 env -u OBS_REMOTE OBS_VAULT="$SB/vault39" "$OB" quick -y
+assert "40 no identity invented for the remote-less vault" \
+    bash -c "! test -e '$SB/vault39/.ob-sync'"
+
+# 40h — the card is minimal: exactly REMOTE + BRANCH, never secrets.
+assert "40 identity holds exactly REMOTE and BRANCH" \
+    bash -c "test \"\$(grep -cE '^(REMOTE|BRANCH)=' '$SB/vault40/.ob-sync/config')\" = 2"
+assert "40 identity never contains credentials" \
+    bash -c "! grep -qiE 'ghp_|github_pat_|password|token=' '$SB/vault40/.ob-sync/config'"
+
+# 40i — status surfaces the identity, human and machine-readable.
+assertout "40 status shows the identity row" "ob-sync/config" \
+    env OBS_VAULT="$SB/vault40" "$OB" status
+if command -v python3 >/dev/null 2>&1; then
+    t "40 status --json parses with the identity section" 0 \
+        bash -c "env OBS_VAULT='$SB/vault40' '$OB' status --json 2>/dev/null | python3 -m json.tool >/dev/null"
+    t "40 status --json exposes the identity remote" 0 \
+        bash -c "env OBS_VAULT='$SB/vault40' '$OB' status --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+vc = d[\"vault_config\"]
+assert vc[\"present\"] is True, vc
+assert vc[\"remote\"].endswith(\"remote40.git\"), vc'"
+
+# 40j — read-only commands never write the identity (migration is a
+# locked-run behavior, not a side effect of looking around).
+rm -rf "$SB/vault40c/.ob-sync"
+env OBS_VAULT="$SB/vault40c" "$OB" status >/dev/null 2>&1 || :
+assert "40 status never writes the identity" bash -c "! test -e '$SB/vault40c/.ob-sync'"
+fi
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"
