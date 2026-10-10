@@ -4,27 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ob-sync — Obsidian ↔ Git sync for Termux, Linux &amp; macOS</title>
-<meta name="description" content="ob-sync: enterprise-grade Obsidian ↔ Git sync from your phone or desktop. One bash script, zero dependencies, 428 tests, a vault identity card that makes clones self-configuring, honest repair, and a menu-driven Init wizard. Trilingual docs: English, فارسی, Español.">
+<meta name="description" content="ob-sync: enterprise-grade Obsidian ↔ Git sync from your phone or desktop. One bash script, zero dependencies, 425 tests, a vault identity card that makes clones self-configuring, honest repair, and a menu-driven Init wizard. Trilingual docs: English, فارسی, Español.">
 <link rel="canonical" href="https://cheginisoroush.github.io/obsidian-sync-scripts/">
 <meta name="theme-color" content="#0d1117">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="ob-sync">
 <meta property="og:title" content="ob-sync — Obsidian ↔ Git sync for Termux, Linux &amp; macOS">
-<meta property="og:description" content="One bash script. Three platforms. Nine layers of defense. 428 tests. Your vault carries its own identity card.">
+<meta property="og:description" content="One bash script. Three platforms. Nine layers of defense. 425 tests. Your vault carries its own identity card.">
 <meta property="og:url" content="https://cheginisoroush.github.io/obsidian-sync-scripts/">
 <meta property="og:image" content="https://cheginisoroush.github.io/obsidian-sync-scripts/assets/social-banner.png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="ob-sync — Obsidian ↔ Git sync for Termux, Linux &amp; macOS">
-<meta name="twitter:description" content="One bash script. Three platforms. Nine layers of defense. 428 tests. Your vault carries its own identity card.">
+<meta name="twitter:description" content="One bash script. Three platforms. Nine layers of defense. 425 tests. Your vault carries its own identity card.">
 <meta name="twitter:image" content="https://cheginisoroush.github.io/obsidian-sync-scripts/assets/social-banner.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1117'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='%2300C896' font-family='monospace'%3E%E2%86%94%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;800&display=swap" rel="stylesheet">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"SoftwareApplication","name":"ob-sync","operatingSystem":"Android, Linux, macOS","applicationCategory":"DeveloperApplication","softwareVersion":"9.5.1","license":"https://opensource.org/licenses/MIT","description":"Enterprise-grade Obsidian ↔ Git sync: one bash script for Termux, Linux and macOS. Backups, honest repair, Init wizard, 428 tests.","url":"https://cheginisoroush.github.io/obsidian-sync-scripts/","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"ob-sync","operatingSystem":"Android, Linux, macOS","applicationCategory":"DeveloperApplication","softwareVersion":"9.6.1","license":"https://opensource.org/licenses/MIT","description":"Enterprise-grade Obsidian ↔ Git sync: one bash script for Termux, Linux and macOS. Backups, honest repair, Init wizard, 425 tests.","url":"https://cheginisoroush.github.io/obsidian-sync-scripts/","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
 </script>
 <style>
 :root{
@@ -175,7 +175,7 @@ footer a:hover{color:var(--grn)}
   <div class="wrap">
     <div class="hero">
       <div class="kicker">
-        <span class="chip c">v9.5.1</span><span class="chip g">✔ 428 tests passing</span><span class="chip">MIT license</span><span class="chip y">Android · Linux · macOS</span>
+        <span class="chip c">v9.6.1</span><span class="chip g">✔ 425 tests passing</span><span class="chip">MIT license</span><span class="chip y">Android · Linux · macOS</span>
       </div>
       <h1>Your vault. Every device. <span class="hl">Always in sync.</span></h1>
       <p class="lead">ob-sync is enterprise-grade Obsidian ↔ Git sync in a single bash script — no daemons, no plugins, no extra dependencies. Checksummed backups before every risky move, a repair mode that tells the truth about failures, and a menu wizard that connects a brand-new vault in seconds.</p>
@@ -186,7 +186,7 @@ footer a:hover{color:var(--grn)}
       <div class="term" role="img" aria-label="ob-sync interactive menu preview">
         <div class="tbar"><i></i><i></i><i></i></div>
 <pre><span class="d">$</span> <span class="w">ob-sync</span>
-<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.5.1</span>
+<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.6.1</span>
 <span class="d">  ------------------------------------------</span>
   <span class="g">1)</span> Sync      <span class="d">backup + rebase + push</span>
   <span class="g">7)</span> Repair    <span class="d">rebuild git metadata</span>   <span class="y">← now honest</span>
@@ -209,7 +209,7 @@ footer a:hover{color:var(--grn)}
         <div class="card"><span class="ico">🩺</span><h3>Honest repair <span class="tag">new in 9.3</span></h3><p>When <code>repair</code> fails, ob-sync now prints the <em>real</em> error instead of a bare FAIL — and on FUSE/sdcardfs filesystems it falls back to a copy-based install automatically.</p></div>
         <div class="card"><span class="ico">🚀</span><h3>Init wizard <span class="tag">new in 9.3</span></h3><p>Brand-new vault? Menu option <code>18) Init</code> asks for your repo URL and does <code>git init</code> + remote wiring + first sync — no terminal gymnastics.</p></div>
         <div class="card"><span class="ico">🌙</span><h3>Cron-ready &amp; quiet</h3><p>Schedule automatic syncs from the menu, get JSON output for scripts, and let the watchdog skip credential prompts when nobody is watching.</p></div>
-        <div class="card"><span class="ico">🌍</span><h3>Trilingual + 428 tests</h3><p>CLI, docs and this site in English, فارسی and Español. Every release is guarded by 428 automated tests — plus a dedicated user-error suite — before it ships.</p></div>
+        <div class="card"><span class="ico">🌍</span><h3>Trilingual + 425 tests</h3><p>CLI, docs and this site in English, فارسی and Español. Every release is guarded by 425 automated tests — plus a dedicated user-error suite — before it ships.</p></div>
       </div>
     </div>
   </section>
@@ -316,6 +316,9 @@ cd obsidian-sync-scripts</pre></div>
         <div class="card"><span class="ico">📺</span><h3>Prompts you can actually see <span class="tag">9.4.1</span></h3><p>Credential prompts no longer vanish into swallowed stderr (the “Termux hang”): interactive output streams through, machine modes print <code>git said:</code> on failure, and a stall guard cuts a dead transfer in about a minute.</p></div>
         <div class="card"><span class="ico">🪪</span><h3>The vault identity card <span class="tag">9.5.0</span></h3><p><code>&lt;vault&gt;/.ob-sync/config</code> stores the vault's <code>REMOTE</code> and <code>BRANCH</code> inside the vault and is committed with it. A clone on a new device is ready to run; a lost <code>origin</code> is restored from the vault's own file — never from another vault's settings.</p></div>
         <div class="card"><span class="ico">🧗</span><h3>Survives the user <span class="tag">9.5.1</span></h3><p>A dedicated user-error suite (56 checks) attacks the tool with CRLF-edited configs, quoted values, typo'd remotes and deleted <code>.git</code> folders. The gaps it found are fixed: hand-edited values parse clean, and a missing <code>.git</code> now gets an honest diagnosis plus a repair hint.</p></div>
+        <div class="card"><span class="ico">🗺️</span><h3>Mounted-drive vault discovery <span class="tag">9.5.2</span></h3><p>Vaults on mounted drives are discovered automatically, and when nothing turns up you can type the path by hand — no more guessing where your notes live.</p></div>
+        <div class="card"><span class="ico">⬆️</span><h3>Self-update on launch <span class="tag">9.6.0</span></h3><p>ob-sync checks a release URL on launch and swaps itself atomically to the new version. Offline devices get an honest bilingual notice and simply keep working; <code>OB_NO_SELFUPDATE=1</code> silences the check completely.</p></div>
+        <div class="card"><span class="ico">🛡️</span><h3>Field-hardening backports <span class="tag">9.6.1</span></h3><p>Branch injection and vault-escape closed, watchdog timeouts reported honestly, and a character-device log (<code>/dev/full</code>) can no longer hang a run — backported straight from the field-test campaign and covered by 95 human-error attack checks.</p></div>
       </div>
     </div>
   </section>
@@ -393,7 +396,7 @@ ob-sync sync      # green on the first run</pre></div>
       <div class="term" role="img" aria-label="پیش‌نمایش منوی تعاملی ob-sync">
         <div class="tbar"><i></i><i></i><i></i></div>
 <pre><span class="d">$</span> <span class="w">ob-sync</span>
-<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.5.1</span>
+<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.6.1</span>
 <span class="d">  ------------------------------------------</span>
   <span class="g">1)</span> Sync      <span class="d">backup + rebase + push</span>
   <span class="g">7)</span> Repair    <span class="d">rebuild git metadata</span>   <span class="y">← now honest</span>
