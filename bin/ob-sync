@@ -6,7 +6,7 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#   Version   : 9.6.2
+#   Version   : 9.6.3
 #   Author    : Soroush Chegini
 #   License   : MIT
 #   Repository: https://github.com/CheginiSoroush/obsidian-sync-scripts
@@ -35,6 +35,21 @@
 #                             helpers, never in forks of this script
 #       · Graceful failure  — errors report and return; nothing exits silently
 #
+#   RELEASE NOTES — 9.6.3 (the clone that answers back)
+#     · repair and init no longer freeze when git asks for credentials:
+#       the watchdog (coreutils timeout) ran the clone in a background
+#       process group, so git's /dev/tty credential read was stopped
+#       with SIGTTIN — the username prompt rendered, keystrokes echoed,
+#       and nothing was ever read ("repair hangs after I enter my
+#       username" — the #2 Termux field report)
+#     · net_clone()/net_ls_remote(): a human gets a foreground clone
+#       with visible progress and an answerable prompt (the same yield
+#       rule net() set in 9.4.x); cron and scripts keep the watchdog
+#     · doctor's human connectivity check gets the same foreground
+#       treatment; the JSON doctor keeps its watchdog
+#     · an interactive repair now offers the credential store helper
+#       when none is configured (init already does), so the token just
+#       typed for the clone can be remembered by the next sync
 #   RELEASE NOTES — 9.6.2 (the vault question, asked once)
 #     · launching the menu no longer asks for a vault twice: the
 #       startup resolver and the menu's session picker were two
@@ -495,7 +510,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.6.2"
+readonly VERSION="9.6.3"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -1897,6 +1912,47 @@ net_quiet() {
 }
 
 ##
+# Interactive-aware CLONE (9.6.3). When a human is attached to the
+# terminal the clone runs in the FOREGROUND, with git's own progress
+# and an answerable credential prompt — coreutils timeout(1) puts its
+# child in a background process group, and git's HTTPS credential read
+# then freezes on SIGTTIN: the username prompt renders, the keystrokes
+# echo, and nothing is ever read (the "repair hangs after I type my
+# username" field report). Unattended runs (cron, scripts, suites)
+# keep the watchdog, stay quiet and discard stderr. Mirrors net()'s
+# yield rule (9.4.x).
+##
+net_clone() {
+    local -a stall=()
+    if (( NET_LOW_SPEED > 0 && NET_LOW_TIME > 0 )); then
+        stall=(-c "http.lowSpeedLimit=$NET_LOW_SPEED" -c "http.lowSpeedTime=$NET_LOW_TIME")
+    fi
+    if [[ -t 0 ]]; then
+        git "${stall[@]}" clone "$@"
+    else
+        run_with_timeout git "${stall[@]}" clone --quiet "$@" 2>/dev/null
+    fi
+}
+
+##
+# Interactive-aware ls-remote (9.6.3) — same foreground rule as
+# net_clone(), for the doctor's HUMAN connectivity check: the credential
+# prompt is answerable. The JSON doctor keeps its own watchdog call so
+# a machine run can never block on a terminal prompt.
+##
+net_ls_remote() {
+    local -a stall=()
+    if (( NET_LOW_SPEED > 0 && NET_LOW_TIME > 0 )); then
+        stall=(-c "http.lowSpeedLimit=$NET_LOW_SPEED" -c "http.lowSpeedTime=$NET_LOW_TIME")
+    fi
+    if [[ -t 0 ]]; then
+        git "${stall[@]}" ls-remote "$@"
+    else
+        run_with_timeout git "${stall[@]}" ls-remote "$@" 2>/dev/null
+    fi
+}
+
+##
 # Actionable guidance after a failed remote operation against an HTTPS
 # remote: GitHub (like most forges) rejects account passwords — a
 # Personal Access Token is required, or the remote switches to SSH.
@@ -2310,8 +2366,11 @@ prepare_repair() {
     temp_register "$candidate"
 
     log "Cloning fresh copy for repair"
-    if ! run_with_timeout git clone --quiet --single-branch --branch "$BRANCH" \
-            "$url" "$candidate/repo" 2>/dev/null; then
+    # 9.6.3: net_clone — foreground + answerable prompts for humans,
+    # watchdog + quiet for machines. The old watchdog-wrapped clone
+    # froze the credential prompt on SIGTTIN (background process group).
+    if ! net_clone --single-branch --branch "$BRANCH" \
+            "$url" "$candidate/repo"; then
         rm -rf -- "$candidate"
         error "Clone failed (network, credentials, empty remote, or wrong branch '$BRANCH')"
         return 1
@@ -4003,6 +4062,14 @@ cmd_repair() {
         success "Repository verified and configured"
         info "Commits: $(g rev-list --count HEAD 2>/dev/null || printf '?')"
         info "Pending differences will be committed on the next sync"
+        # 9.6.3: a human may have just answered the clone's credential
+        # prompt with nothing storing it — offer the store helper here
+        # (init does), so the next sync does not re-prompt. No-op when a
+        # helper is already configured; repair -y and scripts never
+        # reach this (no terminal, no silent global config writes).
+        if [[ -t 0 ]]; then
+            ensure_credential_helper
+        fi
         log "Repair completed"
         return 0
     fi
@@ -5056,7 +5123,7 @@ doctor_run() {
     if [[ -z "$url" ]]; then
         warn "No remote repository configured yet"
         warn "Set one with: ob-sync remote <url>   (e.g. https://github.com/<user>/<vault>.git)"
-    elif remote_out=$(run_with_timeout git ls-remote --symref "$url" 2>/dev/null); then
+    elif remote_out=$(net_ls_remote --symref "$url"); then
         # ONE network call answers reachability, empty-repository
         # detection AND the default branch (pre-9.2.3 an unreachable
         # remote burned the watchdog up to three times — about
@@ -5440,11 +5507,11 @@ cmd_init() {
         mkdir -p "$(dirname "$VAULT")" \
             || { error "Cannot create vault parent directory"; return 1; }
 
-        if ! run_with_timeout git clone --quiet --single-branch --branch "$BRANCH" \
-                "$REMOTE" "$VAULT" 2>/dev/null; then
+        if ! net_clone --single-branch --branch "$BRANCH" \
+                "$REMOTE" "$VAULT"; then
             warn "Clone of branch '$BRANCH' failed — trying the default branch"
             rm -rf -- "$VAULT"
-            if ! run_with_timeout git clone --quiet "$REMOTE" "$VAULT" 2>/dev/null; then
+            if ! net_clone "$REMOTE" "$VAULT"; then
                 rm -rf -- "$VAULT"
                 error "Clone failed — check URL, network and credentials"
                 return 1

@@ -2050,7 +2050,7 @@ t "42 up-to-date release: no action, rc=0" 0 \
     env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
         OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst" version
 assert "42 up-to-date: installed file untouched" \
-    grep -q 'readonly VERSION="9.6.2"' "$SB/norepo/obinst"
+    grep -q 'readonly VERSION="9.6.3"' "$SB/norepo/obinst"
 assert "42 up-to-date: silent on a piped launch" \
     bash -c "! grep -qE 'up to date|updated v|update check' '$SB/out.txt'"
 
@@ -2061,7 +2061,7 @@ t "42 offline launch continues with the current version" 0 \
 assert "42 offline: the bilingual notice is shown" \
     bash -c "grep -qF 'اینترنت خاموشه' '$SB/out.txt'"
 assert "42 offline: the actual command still ran" \
-    bash -c "grep -qE 'ob-sync 9\\.6\\.2' '$SB/out.txt'"
+    bash -c "grep -qE 'ob-sync 9\\.6\\.3' '$SB/out.txt'"
 
 # 42c — the kill-switch: OB_NO_SELFUPDATE=1 must silence the feature
 # completely, even against a forced check and an unreachable URL.
@@ -2073,7 +2073,7 @@ assert "42 kill-switch: no notice, no network touched" \
 
 # 42d — a newer release: replace the installed copy and restart ON the
 # new code (exec, same command line — 'update first, then run').
-sed 's/^readonly VERSION="9\.6\.2"/readonly VERSION="9.9.9"/' "$OB" > "$SB/rel/ob-sync"
+sed 's/^readonly VERSION="9\.6\.3"/readonly VERSION="9.9.9"/' "$OB" > "$SB/rel/ob-sync"
 t "42 newer release replaces the installed copy and re-execs" 0 \
     env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
         OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst" version
@@ -2082,7 +2082,7 @@ assert "42 update: the installed file carries the new version" \
 assert "42 update: the run restarted on the new code" \
     bash -c "grep -qE 'ob-sync 9\\.9\\.9' '$SB/out.txt'"
 assert "42 update: the swap is announced" \
-    bash -c "grep -q 'updated v9.6.2' '$SB/out.txt'"
+    bash -c "grep -q 'updated v9.6.3' '$SB/out.txt'"
 
 # 42e — a payload that is not a runnable ob-sync is refused, loudly,
 # and the current version survives. (The fake passes bash -n — the
@@ -2095,17 +2095,17 @@ t "42 invalid release is refused, current version kept" 0 \
 assert "42 invalid release: honest refusal message" \
     bash -c "grep -q 'not a valid ob-sync' '$SB/out.txt'"
 assert "42 invalid release: installed copy untouched" \
-    grep -q 'readonly VERSION="9.6.2"' "$SB/norepo/obinst2"
+    grep -q 'readonly VERSION="9.6.3"' "$SB/norepo/obinst2"
 
 # 42f — a copy inside a git checkout is NEVER overwritten (that would
 # dirty the user's tree): advisory only, naming the new version.
 cp "$OB" "$SB/rel/ob-sync"
-sed -i 's/^readonly VERSION="9\.6\.2"/readonly VERSION="9.9.9"/' "$SB/rel/ob-sync"
+sed -i 's/^readonly VERSION="9\.6\.3"/readonly VERSION="9.9.9"/' "$SB/rel/ob-sync"
 t "42 git-checkout copy is protected from overwrite" 0 \
     env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
         OB_UPDATE_URL="file://$SB/rel/ob-sync" "$OB" version
 assert "42 checkout guard: the repo file is untouched" \
-    grep -q 'readonly VERSION="9.6.2"' "$OB"
+    grep -q 'readonly VERSION="9.6.3"' "$OB"
 assert "42 checkout guard: advisory names the checkout" \
     bash -c "grep -q 'git checkout' '$SB/out.txt'"
 
@@ -2117,10 +2117,10 @@ t "42 'update' command forces the check, no TTY needed" 0 \
 assert "42 update cmd: installed copy carries the new version" \
     grep -q 'readonly VERSION="9.9.9"' "$SB/norepo/obinst3"
 assert "42 update cmd: reports done" \
-    bash -c "grep -q 'updated v9.6.2' '$SB/out.txt'"
+    bash -c "grep -q 'updated v9.6.3' '$SB/out.txt'"
 
 # 42h — running NEWER than the release (dev build): nothing to do, said
-# honestly. obinst now carries 9.9.9; the release file is reset to 9.6.2.
+# honestly. obinst now carries 9.9.9; the release file is reset to 9.6.3.
 cp "$OB" "$SB/rel/ob-sync"
 t "42 newer dev build than the release: up-to-date, no downgrade" 0 \
     env -u OB_NO_SELFUPDATE OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst" update
@@ -2138,7 +2138,7 @@ t "42 --json runs skip the check (pure document)" 0 \
 assert "42 --json: no update chatter in the document" \
     bash -c "! grep -qE 'up to date|updated v|update check' '$SB/out.txt'"
 assert "42 --json: no install happened" \
-    grep -q 'readonly VERSION="9.6.2"' "$SB/norepo/obinst4"
+    grep -q 'readonly VERSION="9.6.3"' "$SB/norepo/obinst4"
 
 # 42j — cron/pipes (no TTY, no force) never trigger a check at all.
 cp "$OB" "$SB/norepo/obinst5"
@@ -2147,7 +2147,7 @@ t "42 non-interactive run skips the check silently" 0 \
 assert "42 non-interactive: no download, no chatter" \
     bash -c "! grep -qE 'up to date|updated v|update check' '$SB/out.txt'"
 assert "42 non-interactive: installed copy untouched" \
-    grep -q 'readonly VERSION="9.6.2"' "$SB/norepo/obinst5"
+    grep -q 'readonly VERSION="9.6.3"' "$SB/norepo/obinst5"
 else
     echo "  [SKIP] 42a–42j self-update scenarios (30 checks — curl is not"
     echo "         installed; the launch-time check silently degrades without it)"
@@ -2222,6 +2222,42 @@ assert "43 branch_guard gates git with check-ref-format" \
     bash -c "grep -q 'check-ref-format --branch' '$OB'"
 assert "43 init_log only sizes regular files" \
     bash -c "grep -q 'P8: only a regular file can be sized safely' '$OB'"
+
+# == 44. foreground network prompts (9.6.3) ==============================
+#
+# Field report (Termux): `repair` froze the moment the username prompt
+# was answered. Root cause: the repair/init clones ran under
+# run_with_timeout — coreutils timeout(1) puts the child in a background
+# process group, and git's /dev/tty credential read is then stopped with
+# SIGTTIN: the prompt renders, keystrokes echo, nothing is ever read.
+# The fix routes every human-attached clone / ls-remote through
+# net_clone()/net_ls_remote() (foreground, answerable — the same yield
+# rule net() set in 9.4.x), while cron/scripts keep the watchdog+quiet.
+#
+# The prompts themselves cannot be exercised without a pty, so these
+# are source-level contracts — the same style the hardening sections
+# use — plus the existing hermetic repair batteries (13, 38, 39) which
+# keep proving the machine path end-to-end.
+assert "44 net_clone yields the watchdog for humans" \
+    bash -c "sed -n '/^net_clone()/,/^}/p' '$OB' | grep -q '\\[\\[ -t 0 \\]\\]'"
+assert "44 net_clone keeps the watchdog for machines" \
+    bash -c "sed -n '/^net_clone()/,/^}/p' '$OB' | grep -q 'run_with_timeout'"
+assert "44 net_clone clones in the foreground for humans" \
+    bash -c "sed -n '/^net_clone()/,/^}/p' '$OB' | grep -q 'git \"\${stall\[@\]}\" clone'"
+assert "44 repair's verified clone goes through net_clone" \
+    bash -c "sed -n '/^prepare_repair()/,/^}/p' '$OB' | grep -q 'net_clone'"
+assert "44 prepare_repair has no direct watchdog clone left" \
+    bash -c "! sed -n '/^prepare_repair()/,/^}/p' '$OB' | grep -q 'run_with_timeout git clone'"
+assert "44 init's branch clone goes through net_clone" \
+    bash -c "grep -q 'net_clone --single-branch --branch \"\$BRANCH\"' '$OB'"
+assert "44 init's default-branch fallback goes through net_clone" \
+    bash -c "grep -q 'net_clone \"\$REMOTE\" \"\$VAULT\"' '$OB'"
+assert "44 doctor's human check uses net_ls_remote" \
+    bash -c "grep -q 'net_ls_remote --symref' '$OB'"
+assert "44 net_ls_remote yields the watchdog for humans" \
+    bash -c "sed -n '/^net_ls_remote()/,/^}/p' '$OB' | grep -q '\\[\\[ -t 0 \\]\\]'"
+assert "44 interactive repair offers the credential helper" \
+    bash -c "sed -n '/^cmd_repair()/,/^}/p' '$OB' | grep -q 'ensure_credential_helper'"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

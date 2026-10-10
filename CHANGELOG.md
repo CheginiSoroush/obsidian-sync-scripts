@@ -4,6 +4,39 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.6.3] — The clone that answers back
+
+On a phone, `ob-sync repair` froze the moment the username prompt was
+answered. The verified clone ran under the watchdog — coreutils
+`timeout(1)` puts its child in a background process group, and git's
+terminal credential read is then stopped with `SIGTTIN`: the prompt
+rendered, the keystrokes echoed, and nothing was ever read. The same
+latent defect sat in `init`'s fresh clone and in the human doctor's
+remote check; sync never had it because `net()` already yielded the
+watchdog to humans (9.4.x).
+
+### Fixed
+
+- **Repair no longer hangs on the credential prompt** — the verified
+  clone in `prepare_repair` runs in the foreground when a human is
+  attached, with git's own progress visible and an answerable prompt.
+- **`init`'s fresh clone gets the same treatment** — both the
+  branch-targeted clone and the default-branch fallback.
+- **Doctor's human connectivity check** now lets you answer the
+  credential prompt instead of freezing at `Username for...`. The JSON
+  doctor keeps its watchdog so machine output can never block.
+
+### Added
+
+- **`net_clone()` / `net_ls_remote()`** — one interactive-aware path
+  for every network clone and ls-remote: humans get the foreground
+  (prompt answerable, progress visible, dead-network stall guard),
+  machines keep the watchdog, `--quiet` and discarded stderr.
+- **Interactive repair offers the credential store helper** after a
+  successful repair when none is configured (init already does), so
+  the token typed for the clone can be remembered by the next sync
+  instead of re-prompting forever.
+
 ## [9.6.2] — The vault question, asked once
 
 With more than one Obsidian vault on the device, every interactive
