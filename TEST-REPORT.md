@@ -12,7 +12,7 @@
 ## ۱. خلاصه اجرایی
 
 | # | سوئیت | دامنه | نتیجه |
-|---|-------|-------|-------|
+| --- | ------- | ------- | ------- |
 | ۱ | `tests/run-tests.sh` (داخلی پروژه) | مسیرهای طراحی‌شده | ✅ **۳۷۲ PASS / ۰ FAIL** |
 | ۲ | `tests/user-error-tests.sh` (داخلی پروژه) | خطای کاربر پایه | ✅ **۵۶ PASS / ۰ FAIL** |
 | ۳ | `tests/heavy-system-tests.sh` (**جدید**) | تست سنگین سیستمی/کدی | ✅ **۵۶ PASS / ۰ FAIL** |
@@ -30,33 +30,40 @@
 
 - **محل:** `push_run()` خط ~۲۷۱۷ و `sync_run()` خط ~۲۵۳۶ — `push_args=(origin "$BRANCH")`
 - **اثبات (PoC):**
+
   ```bash
   printf '#!/bin/sh\ntouch /tmp/pwned\n' > /tmp/evil.sh && chmod +x /tmp/evil.sh
   OBS_BRANCH="--receive-pack=/tmp/evil.sh" ob-sync push -y
   # → فایل /tmp/pwned ساخته شد! دستور محلی EXECUTE شد.
   ```
+
 - **مکانیزم:** git آرگومانِ شروع‌شده با `--` را به‌عنوان **آپشن خودش** تفسیر می‌کند، نه نام branch. `--receive-pack=<cmd>` یک آپشن واقعی git push است که سمت «ریموت» را اجرا می‌کند — و برای ریموتِ محلی/file، همان‌جا روی ماشین کاربر اجرا می‌شود.
 - **سطوح ورودی آلوده:** `OBS_BRANCH` env (تأیید شد)؛ `BRANCH=` فایل کانفیگ ماشین (خط ۵۹۲، ۷۲۶-۷۲۷) نیز به همان `push_args` می‌رسد.
 - **سیناریوی واقعی:** اسکریپت wrapper، فایل `.env` سورس‌شده، Tasker/Termux widget، یا هر جایی که env از منبع نیمه‌قابل‌اعتماد می‌آید. همچنین `git clone --branch "$BRANCH"` در repair (خط ۲۱۴۹) امن است چون value آپشن است، ولی `rebase origin/$BRANCH` هم به‌خاطر پیشوند `origin/` امن است — **تنها نقطه خطرناک push_args است.**
 - **اصلاح پیشنهادی (یک نقطه، دو خط):** بعد از load_config_overrides/bind_session_remote (یا دقیقاً قبل از ساخت push_args):
+
   ```bash
   if ! git check-ref-format --branch "$BRANCH" 2>/dev/null; then
       error "Invalid branch name (unsafe refname): $BRANCH"
       return 1
   fi
   ```
+
   `git check-ref-format --branch` دقیقاً برای همین ساخته شده: هر نامی که شبیه آپشن باشد را رد می‌کند.
 
 ### 🟠 HIGH — `OBS_ATTACH_DIR` با `..` فایل‌ها را **خارج از vault** جابجا می‌کند
 
 - **محل:** `organize_fix_run()` خط ~۴۶۱۹ — `mkdir -p "$VAULT/$ATTACH_DIR"` و `mv "$VAULT/$f" "$VAULT/$ATTACH_DIR/$name"`
 - **اثبات (PoC):**
+
   ```bash
   OBS_ATTACH_DIR="../escaped-attachments" ob-sync organize --fix
   # → orphan.png از vault خارج و به پوشه والد منتقل شد (rc=0، پیام موفقیت!)
   ```
+
 - **چرا خطرناک است:** فایل از دید گیت «حذف‌شده» می‌شود؛ sync بعدی حذفش را commit و push می‌کند و فایل از **همه دستگاه‌های دیگر هم** پاک می‌شود — کلاس از‌دست‌رفتن‌داده از طریق یک اشتباه ساده کاربر (مسیر نسبی/مثل `./Attachments/` یا `..`).
 - **اصلاح پیشنهادی:** قبل از اجرا اعتبارسنجی کنید:
+
   ```bash
   case "$ATTACH_DIR" in
       /*|*..*|"") error "OBS_ATTACH_DIR must be a relative path inside the vault (no .. , no absolute)"; return 1 ;;
@@ -86,6 +93,7 @@
 ## ۳. آنچه با موفقیت زیر فشار سنگین پاس شد (نقاط قوت)
 
 ### تست‌های سیستمی/کدی (سوئیت جدید D1–D10)
+
 - ✅ **نام‌های فایل خصمانه:** فارسی/RTL، ایموجی، quote، `$()`، backtick، newline واقعی در نام، بایت‌های non-UTF8 (`\xff\xfe`) — sync دوسویه + مقایسه بایت‌به‌بایت بین دو دستگاه کامل صحیح.
 - ✅ **JSON purity:** `status/organize/history --json` با نام‌های حاوی quote/backslash/newline/tab/DEL/بایت غیر UTF-8 همگی خروجی **JSON معتبر** تولید کردند (`json_escape` کامل کار می‌کند).
 - ✅ **توپولوژی سخت:** تودرتوئی ۸۰ سطحی، فایل باینری ۸MB (مقایسه sha256 در ریموت)، vault ۱۲۰۰ فایلی (sync=۱s، backup<1s)، FIFO در vault (واچداگ ۸ ثانیه‌ای کنترل کرد).
@@ -99,6 +107,7 @@
 - ✅ **ShellCheck:** کل پروژه (۶۸۳۴ خط) فقط **۱ info** (SC2015 در خط ۸۱۵ که الگویش امن است) — نتایج به‌شدت تمیز برای این حجم کد.
 
 ### تست‌های خطای انسانی (سوئیت جدید H1–H12)
+
 - ✅ **سوءاستفاده CLI:** ۱۸ حمله (دستور ناشناس، آرگومان اضافی روی sync/backup/verify، flag ناشناس، target شبیه flag برای restore، `--` positional، فلگ‌های تکراری) — همه fail-closed با پیام actionable، **بدون هیچ نویز interpreter**.
 - ✅ **Env خراب:** OBS_VAULT=file، OBS_BACKUP_DIR=file، OBS_LOG در مسیر ناموجود (sync بی‌تأثیر سبز)، TMPDIR ناموجود/file → rc=2 صادقانه، vault هرگز صدمه ندید.
 - ✅ **کانفیگ شکنجه‌شده:** chmod 000، کانفیگ ۱MB زباله، کلیدهای تکراری (آخرین می‌برد)، BOM — همگی تحمل شدند.
@@ -116,18 +125,20 @@
 ## ۴. فایل‌های تحویلی
 
 | فایل | توضیح |
-|------|-------|
+| ------ | ------- |
 | `tests/heavy-system-tests.sh` | سوئیت تست سنگین سیستمی (D1–D10) — ۵۶ بررسی |
 | `tests/human-error-attacks.sh` | سوئیت حمله خطای انسانی (H1–H12) — ۹۵ بررسی |
 | `TEST-REPORT.md` | همین گزارش |
 
 **اجرا:**
+
 ```bash
 bash tests/run-tests.sh            # ۳۷۲ بررسی پایه
 bash tests/user-error-tests.sh     # ۵۶ بررسی خطای کاربر
 bash tests/heavy-system-tests.sh   # ۵۶ بررسی سنگین سیستمی
 bash tests/human-error-attacks.sh  # ۹۵ بررسی حمله انسانی
 ```
+
 هر دو سوئیت جدید self-contained هستند (sandbox یکبار‌مصرف، ریموت محلی، بدون شبکه، بدون روت) و در CI قابل استفاده‌اند. خروجی `FAIL` در human-error-attacks عمداً همان یافته CRITICAL را نگه می‌دارد تا تا اصلاح نشده، رد نشود.
 
 ---
@@ -150,7 +161,7 @@ bash tests/human-error-attacks.sh  # ۹۵ بررسی حمله انسانی
 باتری توسعه‌یافته همین گزارش روی شاخه‌ی جدید `v9.6.1` (که backport سخت‌سازی‌های P1–P8 را در خود دارد) دوباره اجرا شد:
 
 | سوئیت | نتیجه روی v9.6.1 |
-|---|---|
+| --- | --- |
 | `human-error-attacks.sh` | **PASS=95 FAIL=0 SKIP=0** ✅ |
 | `heavy-system-tests.sh` | **PASS=56 FAIL=0 SKIP=0** ✅ (بعد از اصلاح hermetic) |
 | PoC-A (تزریق branch) | رد شد؛ دستور اجرا نشد ✅ |
@@ -160,6 +171,7 @@ bash tests/human-error-attacks.sh  # ۹۵ بررسی حمله انسانی
 **اصلاح hermetic در همین PR:** در D5-C (سناریوی HEAD جنینی)، `git init` بدون پین‌کردن شاخه به پیش‌فرض محیطی وابسته بود (`master` در git استوک، `main` در برخی سندباکس‌ها) و چکِ «محتوا adopt شد» روی یک مسیر میانی لغز می‌شد (rc=0 بدون محتوا). الان `-c init.defaultBranch=main` پین شده است.
 
 **یافته‌های میدانی از همین بازآزمون (برای نسخه‌های بعدی):**
+
 1. ریموت bare بعد از `ob-sync init` همچنان HEAD symref=`master` دارد در حالی که شاخه‌ی واقعی `main` است — `git clone` بعدی با هشدار روبرو می‌شود. پیشنهاد: `git symbolic-ref HEAD refs/heads/main` بعد از اولین push.
 2. adopt شدن دستگاه تازه (unborn) وقتی ریموت کارت هویت (`.ob-sync/config`) در تاریخچه دارد → تضاد کارت هویت و توقف صادقانه (rc=1). رفتار درست است، ولی تجربه‌اش می‌تواند بهتر شود: در سناریوی adoption می‌شد نسخه‌ی remote کارت هویت را گرفت (`take theirs`) تا دستگاه جدید بی‌دردسر تاریخچه را به فرزند بیاورد.
 3. دستگاه تازه با نام شاخه‌ی محلی متفاوت (master) به‌جای adopt، بی‌سروصدا شاخه‌ی موازی را push می‌کند (rc=0، بدون محتوا) — در v9.6.1 فقط وقتی ریموت کارت هویت دارد صادقانه rc=1 می‌شود؛ حالت «ریموت بدون کارت هویت» همچنان fork خاموش است.
