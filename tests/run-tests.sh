@@ -2050,7 +2050,7 @@ t "42 up-to-date release: no action, rc=0" 0 \
     env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
         OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst" version
 assert "42 up-to-date: installed file untouched" \
-    grep -q 'readonly VERSION="9.6.0"' "$SB/norepo/obinst"
+    grep -q 'readonly VERSION="9.6.1"' "$SB/norepo/obinst"
 assert "42 up-to-date: silent on a piped launch" \
     bash -c "! grep -qE 'up to date|updated v|update check' '$SB/out.txt'"
 
@@ -2061,7 +2061,7 @@ t "42 offline launch continues with the current version" 0 \
 assert "42 offline: the bilingual notice is shown" \
     bash -c "grep -qF 'اینترنت خاموشه' '$SB/out.txt'"
 assert "42 offline: the actual command still ran" \
-    bash -c "grep -qE 'ob-sync 9\\.6\\.0' '$SB/out.txt'"
+    bash -c "grep -qE 'ob-sync 9\\.6\\.1' '$SB/out.txt'"
 
 # 42c — the kill-switch: OB_NO_SELFUPDATE=1 must silence the feature
 # completely, even against a forced check and an unreachable URL.
@@ -2073,7 +2073,7 @@ assert "42 kill-switch: no notice, no network touched" \
 
 # 42d — a newer release: replace the installed copy and restart ON the
 # new code (exec, same command line — 'update first, then run').
-sed 's/^readonly VERSION="9\.6\.0"/readonly VERSION="9.9.9"/' "$OB" > "$SB/rel/ob-sync"
+sed 's/^readonly VERSION="9\.6\.1"/readonly VERSION="9.9.9"/' "$OB" > "$SB/rel/ob-sync"
 t "42 newer release replaces the installed copy and re-execs" 0 \
     env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
         OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst" version
@@ -2082,7 +2082,7 @@ assert "42 update: the installed file carries the new version" \
 assert "42 update: the run restarted on the new code" \
     bash -c "grep -qE 'ob-sync 9\\.9\\.9' '$SB/out.txt'"
 assert "42 update: the swap is announced" \
-    bash -c "grep -q 'updated v9.6.0' '$SB/out.txt'"
+    bash -c "grep -q 'updated v9.6.1' '$SB/out.txt'"
 
 # 42e — a payload that is not a runnable ob-sync is refused, loudly,
 # and the current version survives. (The fake passes bash -n — the
@@ -2095,17 +2095,17 @@ t "42 invalid release is refused, current version kept" 0 \
 assert "42 invalid release: honest refusal message" \
     bash -c "grep -q 'not a valid ob-sync' '$SB/out.txt'"
 assert "42 invalid release: installed copy untouched" \
-    grep -q 'readonly VERSION="9.6.0"' "$SB/norepo/obinst2"
+    grep -q 'readonly VERSION="9.6.1"' "$SB/norepo/obinst2"
 
 # 42f — a copy inside a git checkout is NEVER overwritten (that would
 # dirty the user's tree): advisory only, naming the new version.
 cp "$OB" "$SB/rel/ob-sync"
-sed -i 's/^readonly VERSION="9\.6\.0"/readonly VERSION="9.9.9"/' "$SB/rel/ob-sync"
+sed -i 's/^readonly VERSION="9\.6\.1"/readonly VERSION="9.9.9"/' "$SB/rel/ob-sync"
 t "42 git-checkout copy is protected from overwrite" 0 \
     env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
         OB_UPDATE_URL="file://$SB/rel/ob-sync" "$OB" version
 assert "42 checkout guard: the repo file is untouched" \
-    grep -q 'readonly VERSION="9.6.0"' "$OB"
+    grep -q 'readonly VERSION="9.6.1"' "$OB"
 assert "42 checkout guard: advisory names the checkout" \
     bash -c "grep -q 'git checkout' '$SB/out.txt'"
 
@@ -2117,10 +2117,10 @@ t "42 'update' command forces the check, no TTY needed" 0 \
 assert "42 update cmd: installed copy carries the new version" \
     grep -q 'readonly VERSION="9.9.9"' "$SB/norepo/obinst3"
 assert "42 update cmd: reports done" \
-    bash -c "grep -q 'updated v9.6.0' '$SB/out.txt'"
+    bash -c "grep -q 'updated v9.6.1' '$SB/out.txt'"
 
 # 42h — running NEWER than the release (dev build): nothing to do, said
-# honestly. obinst now carries 9.9.9; the release file is reset to 9.6.0.
+# honestly. obinst now carries 9.9.9; the release file is reset to 9.6.1.
 cp "$OB" "$SB/rel/ob-sync"
 t "42 newer dev build than the release: up-to-date, no downgrade" 0 \
     env -u OB_NO_SELFUPDATE OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst" update
@@ -2138,7 +2138,7 @@ t "42 --json runs skip the check (pure document)" 0 \
 assert "42 --json: no update chatter in the document" \
     bash -c "! grep -qE 'up to date|updated v|update check' '$SB/out.txt'"
 assert "42 --json: no install happened" \
-    grep -q 'readonly VERSION="9.6.0"' "$SB/norepo/obinst4"
+    grep -q 'readonly VERSION="9.6.1"' "$SB/norepo/obinst4"
 
 # 42j — cron/pipes (no TTY, no force) never trigger a check at all.
 cp "$OB" "$SB/norepo/obinst5"
@@ -2147,7 +2147,7 @@ t "42 non-interactive run skips the check silently" 0 \
 assert "42 non-interactive: no download, no chatter" \
     bash -c "! grep -qE 'up to date|updated v|update check' '$SB/out.txt'"
 assert "42 non-interactive: installed copy untouched" \
-    grep -q 'readonly VERSION="9.6.0"' "$SB/norepo/obinst5"
+    grep -q 'readonly VERSION="9.6.1"' "$SB/norepo/obinst5"
 else
     echo "  [SKIP] 42a–42j self-update scenarios (30 checks — curl is not"
     echo "         installed; the launch-time check silently degrades without it)"
@@ -2161,6 +2161,67 @@ assert "42 the release URL is the asset itself (no API)" \
     bash -c "grep -q 'releases/latest/download/ob-sync' '$OB'"
 assert "42 the offline notice names the outage in English too" \
     bash -c "grep -q 'network unreachable; running the current version' '$OB'"
+
+echo "== 43. hardening backports (9.6.1) =="
+# Three field-found defects (branch-arg injection via OBS_BRANCH, vault
+# escape via OBS_ATTACH_DIR, init_log hang on a character-device OBS_LOG)
+# were fixed surgically in 9.6.1. Each check re-runs the original PoC in
+# the hermetic sandbox and demands the SAFE outcome.
+
+# 43 setup — a dedicated device with its own bare remote.
+git init -q --bare "$SB/remote43.git"
+git -C "$SB/remote43.git" symbolic-ref HEAD refs/heads/main
+mkdir -p "$SB/vault43"
+git -C "$SB/vault43" init -q
+git -C "$SB/vault43" config user.email tester@local
+git -C "$SB/vault43" config user.name tester
+printf '# v43\n' > "$SB/vault43/note.md"
+git -C "$SB/vault43" add . && git -C "$SB/vault43" commit -qm "v43 seed"
+env OBS_REMOTE="$SB/remote43.git" OBS_VAULT="$SB/vault43" "$OB" init -y >/dev/null 2>&1
+printf 'x\n' >> "$SB/vault43/note.md"
+git -C "$SB/vault43" add . && git -C "$SB/vault43" commit -qm "v43 change"
+
+# 43a — a hostile OBS_BRANCH must be refused BEFORE git ever parses it
+# (9.5.x passed it straight into `git push`, so --receive-pack=<cmd>
+# executed an arbitrary local command).
+printf '#!/bin/sh\ntouch "%s/pwned43"\n' "$SB" > "$SB/pwned43.sh"
+chmod +x "$SB/pwned43.sh"
+rm -f "$SB/pwned43"
+t "43 hostile OBS_BRANCH refused (no git execution)" 1 \
+    env OBS_VAULT="$SB/vault43" OBS_BRANCH="--receive-pack=$SB/pwned43.sh" "$OB" push
+assert "43 hostile branch: honest error names the refusal" \
+    grep -q "Invalid branch name" "$SB/out.txt"
+assert "43 hostile branch: injected helper never executed" \
+    bash -c "[[ ! -e '$SB/pwned43' ]]"
+
+# 43b — OBS_ATTACH_DIR with ".." (or an absolute path) must be rejected:
+# the move would place attachments OUTSIDE the vault and the next sync
+# would commit that deletion to every device.
+printf 'orphan\n' > "$SB/vault43/orphan-43.png"
+t "43 attach-dir traversal refused" 1 \
+    env OBS_VAULT="$SB/vault43" OBS_ATTACH_DIR="../escaped43" "$OB" organize --fix
+assert "43 attach-dir: honest error names the refusal" \
+    grep -q "Unsafe attach dir" "$SB/out.txt"
+assert "43 attach-dir: nothing left the vault" \
+    bash -c "[[ ! -e '$SB/escaped43' ]]"
+
+# 43c — OBS_LOG pointing at a character device must degrade to stdout,
+# never hang: `wc -c <` on /dev/full or /dev/zero reads an endless
+# zero-byte stream (found by the 7-hour fuzz campaign, fixed as P8).
+if command -v timeout >/dev/null 2>&1 && [[ -e /dev/full || -e /dev/zero ]]; then
+    chardev=/dev/full; [[ -e "$chardev" ]] || chardev=/dev/zero
+    t "43 char-device OBS_LOG cannot hang the run" 0 \
+        timeout 5 env OBS_LOG="$chardev" OBS_VAULT="$SB/vault43" "$OB" status
+else
+    echo "  [SKIP] 43 char-device log check (no timeout(1) or no char device)"
+    PASS=$((PASS + 1))
+fi
+
+# 43d — source-level contract (no runtime needed).
+assert "43 branch_guard gates git with check-ref-format" \
+    bash -c "grep -q 'check-ref-format --branch' '$OB'"
+assert "43 init_log only sizes regular files" \
+    bash -c "grep -q 'P8: only a regular file can be sized safely' '$OB'"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

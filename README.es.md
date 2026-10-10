@@ -10,7 +10,7 @@
 
 <img src="docs/typing.svg" alt="Animación de máquina de escribir que cicla entre: Tu vault. Cada dispositivo. Siempre en sync. · Backups con checksum. Restores ensayados. · Listo para cron. JSON nativo. Amable con humanos. · Sin daemon. Sin lock-in. Solo Git." width="760">
 
-[![Version](https://img.shields.io/badge/version-9.6.0-00B4D8?style=for-the-badge&logo=semver&logoColor=white)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-9.6.1-00B4D8?style=for-the-badge&logo=semver&logoColor=white)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-00C896?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20macOS-3DDC84?style=for-the-badge&logo=android&logoColor=white)](#-inicio-rápido)
 [![Shell](https://img.shields.io/badge/shell-Bash%204%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
@@ -142,7 +142,7 @@ $ ob-sync sync
 Ejecuta `ob-sync` sin argumentos. En un teclado de teléfono, teclear subcomandos es fricción — **este menú es la clave de todo:**
 
 <p align="center">
-  <img src="docs/menu.svg" alt="menú interactivo de ob-sync — captura real de terminal (v9.6.0)" width="560">
+  <img src="docs/menu.svg" alt="menú interactivo de ob-sync — captura real de terminal (v9.6.1)" width="560">
 </p>
 
 <details>
@@ -152,7 +152,7 @@ Ejecuta `ob-sync` sin argumentos. En un teclado de teléfono, teclear subcomando
 $ ob-sync
 
   ──────────────────────────────────────────
-     OBSIDIAN SYNC TOOL  ·  v9.6.0
+     OBSIDIAN SYNC TOOL  ·  v9.6.1
   ──────────────────────────────────────────
 
   Vault:   /storage/emulated/0/Documents/Obsidian
@@ -408,7 +408,7 @@ La tabla completa de códigos de error (con primeros auxilios para cada uno) viv
 ```console
 $ ob-sync log --json 3
 {
-  "version": "9.6.0",
+  "version": "9.6.1",
   "command": "log",
   "log_file": "~/ob-sync.log",
   "requested": 3,
@@ -429,7 +429,7 @@ $ ob-sync log --json 50 | jq -r '.entries[] | select(.message | test("ERROR")) |
 ```console
 $ ob-sync history --json 2
 {
-  "version": "9.6.0",
+  "version": "9.6.1",
   "command": "history",
   "requested": 2,
   "count": 2,
@@ -448,7 +448,7 @@ $ ob-sync history --json 50 | jq -r '[.commits[].date] | min'   # when was the v
 ```console
 $ ob-sync organize --fix --json
 {
-  "version": "9.6.0",
+  "version": "9.6.1",
   "command": "organize",
   "mode": "fix",
   "result": "ok",
@@ -475,7 +475,7 @@ $ ob-sync organize --fix --json | jq -r '.moved[].to'   # what just moved?
 ```console
 $ ob-sync status --json
 {
-  "version": "9.6.0",
+  "version": "9.6.1",
   "platform": "linux",
   "vault":  { "path": "~/Documents/Obsidian", "exists": true, "notes": 412, "size_bytes": 28411596 },
   "git":    { "installed": true, "initialized": true, "branch": "main",
@@ -504,7 +504,7 @@ Las cuatro operaciones de datos — `sync`, `pull`, `push` y `quick` — aceptan
 ```console
 $ ob-sync sync --json
 {
-  "version": "9.6.0",
+  "version": "9.6.1",
   "command": "sync",
   "result": "ok",
   "branch": "main",
@@ -567,7 +567,7 @@ $ ob-sync restore --list --json latest | jq -r '.notes'   # → 412 markdown not
 ```console
 $ ob-sync backup --json
 {
-  "version": "9.6.0",
+  "version": "9.6.1",
   "command": "backup",
   "result": "ok",
   "backup": { "name": "manual-20250612-140001.tar.gz", "path": "~/obsidian-backups/manual-20250612-140001.tar.gz",
@@ -585,7 +585,7 @@ true
 ```console
 $ ob-sync verify --json
 {
-  "version": "9.6.0",
+  "version": "9.6.1",
   "command": "verify",
   "result": "ok",
   "backup_dir": "~/obsidian-backups",
@@ -608,7 +608,7 @@ $ ob-sync verify --json | jq -r '.archives[] | select(.status == "corrupt") | .n
 ```console
 $ ob-sync restore --json latest -y
 {
-  "version": "9.6.0",
+  "version": "9.6.1",
   "command": "restore",
   "mode": "apply",
   "result": "ok",
@@ -633,7 +633,7 @@ true
 ```console
 $ ob-sync doctor --json
 {
-  "version": "9.6.0",
+  "version": "9.6.1",
   "command": "doctor",
   "result": "ok",
   "platform": "termux",
@@ -665,7 +665,7 @@ backup_topology
 ```console
 $ ob-sync health --json
 {
-  "version": "9.6.0",
+  "version": "9.6.1",
   "command": "health",
   "result": "ok",
   "branch": "main",

@@ -6,7 +6,7 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#   Version   : 9.6.0
+#   Version   : 9.6.1
 #   Author    : Soroush Chegini
 #   License   : MIT
 #   Repository: https://github.com/CheginiSoroush/obsidian-sync-scripts
@@ -35,6 +35,17 @@
 #                             helpers, never in forks of this script
 #       · Graceful failure  — errors report and return; nothing exits silently
 #
+#   RELEASE NOTES — 9.6.1 (hardening backports from the field)
+#     · branch_guard(): a hostile OBS_BRANCH / BRANCH= config value can
+#       no longer inject git options — --receive-pack=<cmd> on push ran
+#       an arbitrary local command; now refused (check-ref-format)
+#     · OBS_ATTACH_DIR traversal refused: ".." or absolute paths can
+#       never move attachments outside the vault again
+#     · watchdog kills (rc 124) on fetch/push now report honestly as
+#       fetch_timeout / push_timeout instead of a credentials hint
+#     · OBS_LOG on a character device (/dev/full, /dev/zero) degrades to
+#       stdout instead of hanging every command inside wc -c
+#     · restore's symlink refusal explains the 3-step way out
 #   RELEASE NOTES — 9.6.0 (the tool updates itself)
 #       · ob-sync now refreshes ITSELF: on an interactive launch the
 #         installed file is checked against the latest GitHub release
@@ -473,7 +484,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.6.0"
+readonly VERSION="9.6.1"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -1020,6 +1031,13 @@ log() {
 init_log() {
     [[ -n "$LOG_FILE" ]] || return 0
     if ! touch "$LOG_FILE" 2>/dev/null; then
+        LOG_FILE=""
+        return 0
+    fi
+    # P8: only a regular file can be sized safely — `wc -c <` on a character
+    # device (/dev/full, /dev/zero) reads an ENDLESS stream and hangs the
+    # entire command with no output and no watchdog (found by fuzz C7).
+    if [[ ! -f "$LOG_FILE" ]]; then
         LOG_FILE=""
         return 0
     fi
@@ -1754,6 +1772,9 @@ check_archive_safe() {
             -*|d*) ;;
             *)
                 error "Archive contains a special member (type '${line:0:1}') — refused"
+                warn "Most common cause: the vault contains symlinks — 'backup' archives them, but 'restore' never extracts them (fail-closed anti tar-slip)"
+                warn "Inspect the archive first:  ob-sync restore --list <name|latest>"
+                warn "Re-create the links by hand after restore, or (only if you fully trust the archive) extract manually: tar -xzf <archive> -C <vault>"
                 return 1
                 ;;
         esac
@@ -1866,6 +1887,20 @@ cred_hint() {
     [[ "$url" == https://* ]] || return 0
     warn "HTTPS remote: GitHub needs a Personal Access Token as the password, not your account password"
     warn "On mobile, SSH is easier:  ob-sync remote git@github.com:<user>/<repo>.git"
+}
+
+##
+# Refuse any branch value that is not a valid, unambiguous branch name
+# BEFORE it reaches a git command line. `git check-ref-format --branch`
+# rejects option-like values (anything starting with "-"), empty strings
+# and every refname-illegal form — so a hostile OBS_BRANCH (or a bad
+# BRANCH= line in a machine config) can never be parsed by git push as
+# an option (e.g. --receive-pack=<cmd> local command execution).
+##
+branch_guard() {
+    git check-ref-format --branch "$1" >/dev/null 2>&1 && return 0
+    error "Invalid branch name: '$1' — refused (check OBS_BRANCH or BRANCH= in the machine config)"
+    return 1
 }
 
 ##
@@ -2581,7 +2616,14 @@ sync_run() {
     commit_changes "chore(sync)" || { sync_fail commit_failed "Could not commit local changes"; return 1; }
 
     step "Fetching remote state"
-    if ! net_quiet fetch --quiet origin; then
+    local frc=0
+    net_quiet fetch --quiet origin || frc=$?
+    if (( frc == 124 )); then
+        error "Fetch timed out after ${GIT_TIMEOUT}s (OBS_GIT_TIMEOUT) — the connection stalled and git was killed"
+        sync_fail fetch_timeout "git fetch timed out (OBS_GIT_TIMEOUT=${GIT_TIMEOUT}s)"
+        return 1
+    fi
+    if (( frc != 0 )); then
         error "Fetch failed — check network connection and credentials"
         cred_hint
         sync_fail fetch_failed "git fetch failed (network or credentials)"
@@ -2645,9 +2687,17 @@ sync_run() {
         local -a push_args=(origin "$BRANCH")
         remote_branch_exists || push_args=(-u origin "$BRANCH")
 
-        if net_quiet push --quiet "${push_args[@]}"; then
+        branch_guard "$BRANCH" || { sync_fail invalid_branch "Invalid branch name: $BRANCH"; return 1; }
+
+        local sprc=0
+        net_quiet push --quiet "${push_args[@]}" || sprc=$?
+        if (( sprc == 0 )); then
             SYNC_PUSHED=$ahead
             success "Pushed $ahead commit(s)"
+        elif (( sprc == 124 )); then
+            error "Push timed out after ${GIT_TIMEOUT}s (OBS_GIT_TIMEOUT) — the connection stalled and git was killed"
+            sync_fail push_timeout "git push timed out (OBS_GIT_TIMEOUT=${GIT_TIMEOUT}s)"
+            return 1
         else
             error "Push failed — local commits are preserved"
             warn "Check network/credentials, then retry with: ob-sync push"
@@ -2720,7 +2770,19 @@ pull_run() {
     commit_changes "chore(pull)" || { sync_fail commit_failed "Could not commit local changes"; return 1; }
 
     step "Fetching remote state"
-    net_quiet fetch --quiet origin || { error "Fetch failed"; cred_hint; sync_fail fetch_failed "git fetch failed (network or credentials)"; return 1; }
+    local pfrc=0
+    net_quiet fetch --quiet origin || pfrc=$?
+    if (( pfrc == 124 )); then
+        error "Fetch timed out after ${GIT_TIMEOUT}s (OBS_GIT_TIMEOUT) — the connection stalled and git was killed"
+        sync_fail fetch_timeout "git fetch timed out (OBS_GIT_TIMEOUT=${GIT_TIMEOUT}s)"
+        return 1
+    fi
+    if (( pfrc != 0 )); then
+        error "Fetch failed"
+        cred_hint
+        sync_fail fetch_failed "git fetch failed (network or credentials)"
+        return 1
+    fi
 
     if ! remote_branch_exists; then
         info "Remote branch '$BRANCH' not found — nothing to pull"
@@ -2823,13 +2885,23 @@ push_run() {
         return 0
     fi
 
+    branch_guard "$BRANCH" || { sync_fail invalid_branch "Invalid branch name: $BRANCH"; return 1; }
+
     local -a push_args=(origin "$BRANCH")
     remote_branch_exists || push_args=(-u origin "$BRANCH")
 
-    if net_quiet push --quiet "${push_args[@]}"; then
+    local prc=0
+    net_quiet push --quiet "${push_args[@]}" || prc=$?
+    if (( prc == 0 )); then
         SYNC_PUSHED=$ahead
         success "Pushed $ahead commit(s)"
         return 0
+    fi
+
+    if (( prc == 124 )); then
+        error "Push timed out after ${GIT_TIMEOUT}s (OBS_GIT_TIMEOUT) — the connection stalled and git was killed"
+        sync_fail push_timeout "git push timed out (OBS_GIT_TIMEOUT=${GIT_TIMEOUT}s)"
+        return 1
     fi
 
     error "Push failed — check network connection and credentials"
@@ -4724,6 +4796,18 @@ organize_print_human() {
 # them as skipped rows.
 ##
 organize_fix_run() {
+    # HIGH fix (field campaign): OBS_ATTACH_DIR must never be able to move
+    # files OUT of the vault — a relative path containing ".." (or an
+    # absolute path) would relocate attachments outside git's view, and
+    # the next sync would commit that deletion to every device.
+    case "$ATTACH_DIR" in
+        ""|/*|*..*)
+            ORG_ERR_CODE="attach_dir_unsafe"
+            ORG_ERR_MSG="Unsafe attach dir: '$ATTACH_DIR' — must be a relative path inside the vault (no '..' components, not absolute)"
+            error "$ORG_ERR_MSG"
+            return 1
+            ;;
+    esac
     step "Moving orphans into $ATTACH_DIR"
     mkdir -p "$VAULT/$ATTACH_DIR" \
         || { error "Cannot create: $VAULT/$ATTACH_DIR"

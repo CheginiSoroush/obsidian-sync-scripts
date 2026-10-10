@@ -4,6 +4,49 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.6.1] — Hardening backports from the field
+
+An independent 7-hour fuzz and attack campaign (~2,300 automated
+checks) against a v9.5.1 install found three real defects. This release
+ports those surgical fixes onto the current codebase, and the
+campaign's three proofs-of-concept are now permanent regression checks.
+
+### Security
+
+- **Branch-name injection closed (critical)** — a hostile `OBS_BRANCH`
+  (or a `BRANCH=` line in a machine config) reached the `git push`
+  command line verbatim: `OBS_BRANCH='--receive-pack=<command>'`
+  executed an arbitrary local command. The new `branch_guard()` gates
+  both push sites with `git check-ref-format --branch`; option-like,
+  empty and refname-illegal values are refused (`invalid_branch`).
+- **Vault escape via attachments closed (high)** — `OBS_ATTACH_DIR`
+  containing `..` or an absolute path let `ob-sync organize --fix`
+  move files *outside* the vault; the next sync would have committed
+  that deletion to every device. Such values are now refused
+  (`attach_dir_unsafe`).
+
+### Fixed
+
+- **Watchdog kills tell the truth** — a `git fetch`/`git push` stopped
+  by the network watchdog (rc 124) reported "check network connection
+  and credentials". All four call sites (sync fetch, sync push, pull
+  fetch, push) now report the stall explicitly: new `fetch_timeout` /
+  `push_timeout` codes and `OBS_GIT_TIMEOUT` in the message.
+- **`OBS_LOG` on a character device no longer hangs everything** —
+  sizing the log with `wc -c <` on `/dev/full` or `/dev/zero` reads an
+  endless zero-byte stream and froze the command with no output. Only
+  regular files are sized now; anything else degrades to stdout.
+- **Restore explains symlink dead-ends** — when a backup contains a
+  special member, the refusal now spells out the three-step way out
+  (inspect with `restore --list`, re-create links by hand, or extract
+  manually if you fully trust the archive).
+
+### Added
+
+- **Suite section 43** — the campaign's three proofs-of-concept
+  (branch injection, vault escape, device hang) as nine permanent
+  hermetic regression checks (416 → 425 in the main suite).
+
 ## [9.6.0] — The tool updates itself
 
 The last mile was manual: after a release, every device kept running
