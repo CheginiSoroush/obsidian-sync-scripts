@@ -108,8 +108,7 @@ cd obsidian-sync-scripts
 ob-sync init && ob-sync sync   # init asks for your GitHub repo URL
 ```
 
-> [!TIP]
-> **ob-sync keeps itself fresh.** Every interactive launch checks the latest GitHub release *before* doing anything else: a newer release is downloaded, validated (shebang + `bash -n` + embedded version) and swapped in atomically, then the run restarts on the new code. No network? It says so — `اینترنت خاموشه — network unreachable` — and continues with what it has. `ob-sync update` forces a check anytime.
+**💡 ob-sync keeps itself fresh.** Every interactive launch checks the latest GitHub release *before* doing anything else: a newer release is downloaded, validated (shebang + `bash -n` + embedded version) and swapped in atomically, then the run restarts on the new code. No network? It says so — `اینترنت خاموشه — network unreachable` — and continues with what it has. `ob-sync update` forces a check anytime.
 
 > [!WARNING]
 > Piping installers into `bash` is convenient but blind. If you prefer to inspect before executing, review [`mobile/install.sh`](mobile/install.sh) or [`desktop/install.sh`](desktop/install.sh) first, or use the `git clone` method above.

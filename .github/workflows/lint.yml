@@ -79,6 +79,10 @@ jobs:
       # The suite and bin/ob-sync need the GNU toolchain (stat -c, GNU
       # tar/find/grep/sed, coreutils mktemp/du/sha256sum) plus python3 so
       # the JSON shape assertions actually run instead of being skipped.
+      # curl is installed too: section 42 of the suite drives the REAL
+      # curl binary for the self-update scenarios (file:// fixtures, a
+      # refused localhost connection) — without it those 30 checks would
+      # self-skip and the Alpine jobs would silently lose coverage.
       #
       # Those images also ship years-old ca-certificates-bundle snapshots,
       # while dl-cdn now serves a current Let's Encrypt chain — their apk
@@ -94,9 +98,9 @@ jobs:
 
       - name: Install git and the GNU toolchain (https, http fallback)
         run: |
-          apk add --no-cache git tar findutils coreutils grep sed python3 \
+          apk add --no-cache git tar findutils coreutils grep sed python3 curl \
             || { sed -i 's|^https:|http:|' /etc/apk/repositories
-                 apk add --no-cache git tar findutils coreutils grep sed python3; }
+                 apk add --no-cache git tar findutils coreutils grep sed python3 curl; }
 
       - name: Check out the repository
         uses: actions/checkout@v5
