@@ -6,7 +6,7 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#   Version   : 9.6.3
+#   Version   : 9.6.4
 #   Author    : Soroush Chegini
 #   License   : MIT
 #   Repository: https://github.com/CheginiSoroush/obsidian-sync-scripts
@@ -34,6 +34,22 @@
 #       · One core          — platform differences live behind portability
 #                             helpers, never in forks of this script
 #       · Graceful failure  — errors report and return; nothing exits silently
+#
+#   RELEASE NOTES — 9.6.4 (the marathon's three field fixes)
+#     · repair on a brand-new machine no longer dies with a cryptic
+#       "mktemp: failed to create directory": prepare_repair now creates
+#       the backup directory first, the same bootstrap make_backup() and
+#       sync_run() already do (found by the interactive marathon — a
+#       fresh install has never run a backup, so ~/obsidian-backups did
+#       not exist when repair needed its staging area)
+#     · `ob-sync init -y` — a TRAILING -y now behaves like a leading one,
+#       as the help always promised: the dispatcher dropped the arguments
+#       and cmd_init ignored the flag, so the vault confirmation still
+#       fired on a scripted phone setup
+#     · the vault switcher's out-of-range numbers are named honestly:
+#       typing 99 reported "No such directory: 99" and sent users hunting
+#       for a folder they never typed — a bad menu pick is now "Invalid
+#       selection: 99 (pick 1-N)", matching the startup picker
 #
 #   RELEASE NOTES — 9.6.3 (the clone that answers back)
 #     · repair and init no longer freeze when git asks for credentials:
@@ -510,7 +526,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.6.3"
+readonly VERSION="9.6.4"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -2362,7 +2378,14 @@ prepare_repair() {
         warn "Fix: ob-sync remote <url>  (or re-run: ob-sync init)"
         return 1
     fi
-    candidate=$(mktemp -d "${BACKUP_DIR}/repair-XXXXXX") || return 1
+    candidate=$(mktemp -d "${BACKUP_DIR}/repair-XXXXXX") || {
+        # A fresh install may never have created the backup directory yet
+        # (backups are born with the first backup/sync). Repair must not
+        # die with a cryptic mktemp error before it even starts — the
+        # same bootstrap make_backup() and sync_run() do.
+        mkdir -p "$BACKUP_DIR" 2>/dev/null || :
+        candidate=$(mktemp -d "${BACKUP_DIR}/repair-XXXXXX") || return 1
+    }
     temp_register "$candidate"
 
     log "Cloning fresh copy for repair"
@@ -5367,6 +5390,14 @@ cmd_doctor_json() {
 
 cmd_init() {
     section "First-Time Setup"
+    # `ob-sync init -y` — the help promises -y is valid before OR after the
+    # command, and cmd_repair/cron/restore honor a trailing -y. main() stops
+    # parsing global options at the first non-option word, so a trailing -y
+    # arrives HERE as $1; without this it was silently ignored and the
+    # vault confirm still fired (marathon M6b finding).
+    if [[ "${1:-}" == "-y" || "${1:-}" == "--yes" ]]; then
+        ASSUME_YES=1
+    fi
     load_config_overrides
 
     step "Checking environment"
@@ -6716,6 +6747,14 @@ pick_vault_menu() {
     picked=""
     if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#cands[@]} )); then
         picked="${cands[reply - 1]}"
+    elif [[ "$reply" =~ ^[0-9]+$ ]]; then
+        # A NUMBER outside 1..N is a bad menu pick, not a pathname — the
+        # fall-through below reported "No such directory: 99" and sent
+        # users hunting for a folder they never typed (marathon M5e
+        # finding; the startup picker in resolve_vault already words
+        # this honestly).
+        error "Invalid selection: $reply (pick 1-${#cands[@]}) — keeping: $VAULT"
+        return 0
     elif [[ -n "$reply" ]]; then
         # 9.5.2: a typed path is validated honestly — ~ works, and a
         # wrong path is named instead of a generic "invalid selection".
@@ -7255,7 +7294,7 @@ dispatch() {
             done
             if (( o_fix )); then with_lock cmd_organize "$@"
                          else       cmd_organize "$@" ; fi ;;
-        init)         require_git && with_lock cmd_init ;;
+        init)         require_git && with_lock cmd_init "$@" ;;
         remote)       with_lock cmd_remote "$@" ;;
 
         *)            error "Unknown command: $cmd"; echo; cmd_help; return 1 ;;

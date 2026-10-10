@@ -4,6 +4,36 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.6.4] — Found by the marathon
+
+Three field bugs surfaced by a real-terminal test marathon: a new
+interactive suite (`tests/marathon-interactive.sh`) drives the tool
+through a genuine pty against a credential-gated remote — every menu
+entry, every prompt answered in order, every hostile input — while a
+soak loop (`tests/soak-loop.sh`) repeats the full lifecycle for
+hundreds of rounds. 79 + 161 checks, both green.
+
+### Fixed
+
+- **Repair crashed on a brand-new machine** — `prepare_repair`
+  created its staging area inside `~/obsidian-backups` before anything
+  had ever made that directory, so the first repair on a fresh install
+  died with `mktemp: failed to create directory` instead of repairing.
+  The backup directory is now bootstrapped first, exactly like
+  `make_backup()` and `sync_run()` already did.
+- **A trailing `-y` was ignored by `init`** — the help has always
+  promised that `-y` is valid before or after the command, and
+  `repair` / `cron uninstall` / `restore` honor it; but the dispatcher
+  dropped `init`'s arguments on the floor, so `ob-sync init -y` still
+  asked "Use this vault?" and failed closed in scripts. Both the
+  dispatcher (argument forwarding) and `cmd_init` (flag recognition)
+  now agree with the documentation.
+- **The vault switcher insulted out-of-range numbers** — typing `99`
+  at the session picker answered "No such directory: 99" because the
+  number fell through to the typed-path branch. A bad menu pick is now
+  reported as one: "Invalid selection: 99 (pick 1-N)" — the same
+  wording the startup picker has used all along.
+
 ## [9.6.3] — The clone that answers back
 
 On a phone, `ob-sync repair` froze the moment the username prompt was
