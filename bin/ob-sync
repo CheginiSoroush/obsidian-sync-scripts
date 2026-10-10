@@ -6,7 +6,7 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#   Version   : 9.6.1
+#   Version   : 9.6.2
 #   Author    : Soroush Chegini
 #   License   : MIT
 #   Repository: https://github.com/CheginiSoroush/obsidian-sync-scripts
@@ -35,6 +35,17 @@
 #                             helpers, never in forks of this script
 #       · Graceful failure  — errors report and return; nothing exits silently
 #
+#   RELEASE NOTES — 9.6.2 (the vault question, asked once)
+#     · launching the menu no longer asks for a vault twice: the
+#       startup resolver and the menu's session picker were two
+#       independent resolvers, so every launch with two or more
+#       vaults asked once before the first screen and once again
+#     · the startup choice is remembered — picking a vault at launch
+#       pins it to the machine config (the same pin `ob-sync init`
+#       writes), so the next launch, cron and piped runs resolve
+#       silently; 19) Switch stays the per-session switcher
+#     · remote binding untouched — the vault's own origin and
+#       identity card still outrank the machine config (9.4.2 guard)
 #   RELEASE NOTES — 9.6.1 (hardening backports from the field)
 #     · branch_guard(): a hostile OBS_BRANCH / BRANCH= config value can
 #       no longer inject git options — --receive-pack=<cmd> on push ran
@@ -484,7 +495,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.6.1"
+readonly VERSION="9.6.2"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -792,6 +803,15 @@ resolve_vault() {
             if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#candidates[@]} )); then
                 VAULT="${candidates[reply - 1]}"
                 VAULT_SOURCE="selected"
+                # 9.6.2: a choice made once is a choice remembered. Pin
+                # the pick exactly like `ob-sync init` does, so the next
+                # launch, cron and piped runs resolve silently instead
+                # of asking again. Remote binding is untouched: the
+                # vault's own origin and identity card still outrank the
+                # machine config (the 9.4.2 cross-vault guard).
+                if [[ -d "$VAULT" ]] && config_set VAULT "$VAULT" 2>/dev/null; then
+                    info "Pinned as the default vault — 19) Switch changes it per session"
+                fi
                 bind_session_remote
                 return 0
             fi
@@ -6712,9 +6732,15 @@ show_menu() {
 # acquired and released around each individual operation.
 ##
 main_menu() {
-    # Session vault switcher (multi-vault support) — runs before the
-    # first screen so the menu always targets the vault the user meant.
-    pick_vault_menu
+    # 9.6.2 — the vault question, asked once. Resolution happens here
+    # only when it has not happened yet: `ob-sync menu` reaches
+    # main_menu without setup(), while a no-argument launch already
+    # resolved inside setup() and skips this. The interactive pick made
+    # at startup is pinned by resolve_vault itself, so cron, piped runs
+    # and the next launch never re-ask. Before 9.6.2 an independent
+    # session picker ran here too — every launch with two or more
+    # vaults asked twice. 19) Switch remains the per-session switcher.
+    [[ "$VAULT_SOURCE" != "unresolved" ]] || resolve_vault || return 1
     while true; do
         show_menu
         local choice=""

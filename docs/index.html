@@ -24,7 +24,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;800&display=swap" rel="stylesheet">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"SoftwareApplication","name":"ob-sync","operatingSystem":"Android, Linux, macOS","applicationCategory":"DeveloperApplication","softwareVersion":"9.6.1","license":"https://opensource.org/licenses/MIT","description":"Enterprise-grade Obsidian ↔ Git sync: one bash script for Termux, Linux and macOS. Backups, honest repair, Init wizard, 425 tests.","url":"https://cheginisoroush.github.io/obsidian-sync-scripts/","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"ob-sync","operatingSystem":"Android, Linux, macOS","applicationCategory":"DeveloperApplication","softwareVersion":"9.6.2","license":"https://opensource.org/licenses/MIT","description":"Enterprise-grade Obsidian ↔ Git sync: one bash script for Termux, Linux and macOS. Backups, honest repair, Init wizard, 425 tests.","url":"https://cheginisoroush.github.io/obsidian-sync-scripts/","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
 </script>
 <style>
 :root{
@@ -175,7 +175,7 @@ footer a:hover{color:var(--grn)}
   <div class="wrap">
     <div class="hero">
       <div class="kicker">
-        <span class="chip c">v9.6.1</span><span class="chip g">✔ 425 tests passing</span><span class="chip">MIT license</span><span class="chip y">Android · Linux · macOS</span>
+        <span class="chip c">v9.6.2</span><span class="chip g">✔ 425 tests passing</span><span class="chip">MIT license</span><span class="chip y">Android · Linux · macOS</span>
       </div>
       <h1>Your vault. Every device. <span class="hl">Always in sync.</span></h1>
       <p class="lead">ob-sync is enterprise-grade Obsidian ↔ Git sync in a single bash script — no daemons, no plugins, no extra dependencies. Checksummed backups before every risky move, a repair mode that tells the truth about failures, and a menu wizard that connects a brand-new vault in seconds.</p>
@@ -186,7 +186,7 @@ footer a:hover{color:var(--grn)}
       <div class="term" role="img" aria-label="ob-sync interactive menu preview">
         <div class="tbar"><i></i><i></i><i></i></div>
 <pre><span class="d">$</span> <span class="w">ob-sync</span>
-<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.6.1</span>
+<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.6.2</span>
 <span class="d">  ------------------------------------------</span>
   <span class="g">1)</span> Sync      <span class="d">backup + rebase + push</span>
   <span class="g">7)</span> Repair    <span class="d">rebuild git metadata</span>   <span class="y">← now honest</span>
@@ -319,6 +319,7 @@ cd obsidian-sync-scripts</pre></div>
         <div class="card"><span class="ico">🗺️</span><h3>Mounted-drive vault discovery <span class="tag">9.5.2</span></h3><p>Vaults on mounted drives are discovered automatically, and when nothing turns up you can type the path by hand — no more guessing where your notes live.</p></div>
         <div class="card"><span class="ico">⬆️</span><h3>Self-update on launch <span class="tag">9.6.0</span></h3><p>ob-sync checks a release URL on launch and swaps itself atomically to the new version. Offline devices get an honest bilingual notice and simply keep working; <code>OB_NO_SELFUPDATE=1</code> silences the check completely.</p></div>
         <div class="card"><span class="ico">🛡️</span><h3>Field-hardening backports <span class="tag">9.6.1</span></h3><p>Branch injection and vault-escape closed, watchdog timeouts reported honestly, and a character-device log (<code>/dev/full</code>) can no longer hang a run — backported straight from the field-test campaign and covered by 95 human-error attack checks.</p></div>
+        <div class="card"><span class="ico">🎯</span><h3>One-ask vault picker <span class="tag">9.6.2</span></h3><p>Multi-vault devices used to be asked for a vault twice on every launch. Now the startup pick is asked once and pinned to the machine config — cron, piped runs and the next launches resolve silently, while <code>19) Switch</code> stays the per-session switcher.</p></div>
       </div>
     </div>
   </section>
@@ -396,7 +397,7 @@ ob-sync sync      # green on the first run</pre></div>
       <div class="term" role="img" aria-label="پیش‌نمایش منوی تعاملی ob-sync">
         <div class="tbar"><i></i><i></i><i></i></div>
 <pre><span class="d">$</span> <span class="w">ob-sync</span>
-<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.6.1</span>
+<span class="c">  OBSIDIAN SYNC TOOL  ·  v9.6.2</span>
 <span class="d">  ------------------------------------------</span>
   <span class="g">1)</span> Sync      <span class="d">backup + rebase + push</span>
   <span class="g">7)</span> Repair    <span class="d">rebuild git metadata</span>   <span class="y">← now honest</span>

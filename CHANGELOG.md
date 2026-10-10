@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.6.2] — The vault question, asked once
+
+With more than one Obsidian vault on the device, every interactive
+launch asked for a vault twice: the startup resolver and the menu's
+session picker were two independent resolvers doing one job.
+
+### Fixed
+
+- **Double vault prompt removed** — the menu no longer runs a second
+  picker before the first screen. `ob-sync menu` now resolves the vault
+  exactly like a no-argument launch does, and 19) Switch remains the
+  explicit per-session switcher for multi-vault devices.
+
+### Changed
+
+- **The startup choice is remembered** — picking a vault from the
+  startup list pins it to the machine config (the same pin
+  `ob-sync init` writes), so the next launch, cron and piped runs
+  resolve silently. Remote binding is unchanged: the vault's own
+  origin and identity card still outrank the machine config, so the
+  pin can never cross vault remotes (the 9.4.2 guard).
+
 ## [9.6.1] — Hardening backports from the field
 
 An independent 7-hour fuzz and attack campaign (~2,300 automated
