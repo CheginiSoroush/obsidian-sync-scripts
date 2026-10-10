@@ -100,6 +100,10 @@ export OBS_GIT_TIMEOUT=30
 # override at its own fixtures (C5/C6/C7).
 mkdir -p "$SB/discover-roots"
 export OB_DISCOVER_ROOTS="$SB/discover-roots"
+# Self-update firewall (9.6.0) — same reasoning as run-tests.sh: the
+# suite never touches the network, so the launch-time update check is
+# switched off for every scenario below.
+export OB_NO_SELFUPDATE=1
 # NOTE: OBS_CONFIG / OBS_VAULT / OBS_REMOTE are deliberately NOT exported —
 # every scenario below passes its own broken values, exactly like a user
 # would. Nothing may leak between scenarios.

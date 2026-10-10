@@ -109,6 +109,12 @@ export OBS_REMOTE="$SB/remote.git"
 # section 41 → $SB/media-root).
 mkdir -p "$SB/discover-roots"
 export OB_DISCOVER_ROOTS="$SB/discover-roots"
+# Self-update firewall (9.6.0): ob-sync now refreshes itself from the live
+# GitHub release at interactive launch. The suite must NEVER touch the
+# network — every launch below runs with the feature switched off, and
+# section 42 tests the feature hermetically through file:// URLs instead
+# (each check there unsets this override explicitly).
+export OB_NO_SELFUPDATE=1
 LOCKDIR="$SB/tmp/obs-sync.lock"
 
 git config --global user.email test@example.com
@@ -2017,6 +2023,131 @@ assert "41 non-vault directories need confirmation" \
     grep -q "it may not be an Obsidian vault" "$OB"
 assert "41 wrong typed paths are named honestly" \
     grep -q "No such directory" "$OB"
+
+echo "== 42. self-update (9.6.0) =="
+# Hermetic by construction: the "release" is a local file:// URL, the
+# "offline network" is port 1 on localhost (connection refused — curl exit
+# 7, the same code a dead Wi-Fi link produces), and every installed copy
+# lives OUTSIDE any git work tree, exactly like ~/.local/bin. The harness
+# itself runs with OB_NO_SELFUPDATE=1 (see the firewall above); each check
+# here unsets it explicitly. The TTY gate is forced with
+# OB_FORCE_UPDATE_CHECK=1 because the suite's stdout is always a pipe.
+mkdir -p "$SB/rel" "$SB/norepo"
+cp "$OB" "$SB/rel/ob-sync"
+cp "$OB" "$SB/norepo/obinst"
+
+# 42a — an up-to-date release changes nothing and stays silent on a
+# non-TTY launch (cron/pipes must never see update chatter).
+t "42 up-to-date release: no action, rc=0" 0 \
+    env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
+        OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst" version
+assert "42 up-to-date: installed file untouched" \
+    grep -q 'readonly VERSION="9.6.0"' "$SB/norepo/obinst"
+assert "42 up-to-date: silent on a piped launch" \
+    bash -c "! grep -qE 'up to date|updated v|update check' '$SB/out.txt'"
+
+# 42b — the offline path: refuse nothing, crash nothing, say it plainly.
+t "42 offline launch continues with the current version" 0 \
+    env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
+        OB_UPDATE_URL="http://127.0.0.1:1/ob-sync" "$SB/norepo/obinst" version
+assert "42 offline: the bilingual notice is shown" \
+    bash -c "grep -qF 'اینترنت خاموشه' '$SB/out.txt'"
+assert "42 offline: the actual command still ran" \
+    bash -c "grep -qE 'ob-sync 9\\.6\\.0' '$SB/out.txt'"
+
+# 42c — the kill-switch: OB_NO_SELFUPDATE=1 must silence the feature
+# completely, even against a forced check and an unreachable URL.
+t "42 kill-switch silences the check completely" 0 \
+    env OB_NO_SELFUPDATE=1 OB_FORCE_UPDATE_CHECK=1 \
+        OB_UPDATE_URL="http://127.0.0.1:1/ob-sync" "$SB/norepo/obinst" version
+assert "42 kill-switch: no notice, no network touched" \
+    bash -c "! grep -qF 'اینترنت خاموشه' '$SB/out.txt'"
+
+# 42d — a newer release: replace the installed copy and restart ON the
+# new code (exec, same command line — 'update first, then run').
+sed 's/^readonly VERSION="9\.6\.0"/readonly VERSION="9.9.9"/' "$OB" > "$SB/rel/ob-sync"
+t "42 newer release replaces the installed copy and re-execs" 0 \
+    env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
+        OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst" version
+assert "42 update: the installed file carries the new version" \
+    grep -q 'readonly VERSION="9.9.9"' "$SB/norepo/obinst"
+assert "42 update: the run restarted on the new code" \
+    bash -c "grep -qE 'ob-sync 9\\.9\\.9' '$SB/out.txt'"
+assert "42 update: the swap is announced" \
+    bash -c "grep -q 'updated v9.6.0' '$SB/out.txt'"
+
+# 42e — a payload that is not a runnable ob-sync is refused, loudly,
+# and the current version survives. (The fake passes bash -n — the
+# embedded VERSION check is what catches it, exactly the point.)
+printf '#!/bin/sh\necho nope\n' > "$SB/rel/ob-sync"
+cp "$OB" "$SB/norepo/obinst2"
+t "42 invalid release is refused, current version kept" 0 \
+    env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
+        OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst2" version
+assert "42 invalid release: honest refusal message" \
+    bash -c "grep -q 'not a valid ob-sync' '$SB/out.txt'"
+assert "42 invalid release: installed copy untouched" \
+    grep -q 'readonly VERSION="9.6.0"' "$SB/norepo/obinst2"
+
+# 42f — a copy inside a git checkout is NEVER overwritten (that would
+# dirty the user's tree): advisory only, naming the new version.
+cp "$OB" "$SB/rel/ob-sync"
+sed -i 's/^readonly VERSION="9\.6\.0"/readonly VERSION="9.9.9"/' "$SB/rel/ob-sync"
+t "42 git-checkout copy is protected from overwrite" 0 \
+    env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
+        OB_UPDATE_URL="file://$SB/rel/ob-sync" "$OB" version
+assert "42 checkout guard: the repo file is untouched" \
+    grep -q 'readonly VERSION="9.6.0"' "$OB"
+assert "42 checkout guard: advisory names the checkout" \
+    bash -c "grep -q 'git checkout' '$SB/out.txt'"
+
+# 42g — the explicit `update` command forces the check WITHOUT a TTY
+# (and without OB_FORCE_UPDATE_CHECK), reports and returns — no exec.
+cp "$OB" "$SB/norepo/obinst3"
+t "42 'update' command forces the check, no TTY needed" 0 \
+    env -u OB_NO_SELFUPDATE OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst3" update
+assert "42 update cmd: installed copy carries the new version" \
+    grep -q 'readonly VERSION="9.9.9"' "$SB/norepo/obinst3"
+assert "42 update cmd: reports done" \
+    bash -c "grep -q 'updated v9.6.0' '$SB/out.txt'"
+
+# 42h — running NEWER than the release (dev build): nothing to do, said
+# honestly. obinst now carries 9.9.9; the release file is reset to 9.6.0.
+cp "$OB" "$SB/rel/ob-sync"
+t "42 newer dev build than the release: up-to-date, no downgrade" 0 \
+    env -u OB_NO_SELFUPDATE OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst" update
+assert "42 dev build: kept on the newer version" \
+    grep -q 'readonly VERSION="9.9.9"' "$SB/norepo/obinst"
+assert "42 dev build: the no-op is announced" \
+    bash -c "grep -q 'up to date' '$SB/out.txt'"
+
+# 42i — --json runs are machine documents: the check is skipped
+# entirely, even when forced and a newer release sits one URL away.
+cp "$OB" "$SB/norepo/obinst4"
+t "42 --json runs skip the check (pure document)" 0 \
+    env -u OB_NO_SELFUPDATE OB_FORCE_UPDATE_CHECK=1 \
+        OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst4" status --json
+assert "42 --json: no update chatter in the document" \
+    bash -c "! grep -qE 'up to date|updated v|update check' '$SB/out.txt'"
+assert "42 --json: no install happened" \
+    grep -q 'readonly VERSION="9.6.0"' "$SB/norepo/obinst4"
+
+# 42j — cron/pipes (no TTY, no force) never trigger a check at all.
+cp "$OB" "$SB/norepo/obinst5"
+t "42 non-interactive run skips the check silently" 0 \
+    env -u OB_NO_SELFUPDATE OB_UPDATE_URL="file://$SB/rel/ob-sync" "$SB/norepo/obinst5" version
+assert "42 non-interactive: no download, no chatter" \
+    bash -c "! grep -qE 'up to date|updated v|update check' '$SB/out.txt'"
+assert "42 non-interactive: installed copy untouched" \
+    grep -q 'readonly VERSION="9.6.0"' "$SB/norepo/obinst5"
+
+# 42k — source-level contract of the feature.
+assert "42 OB_NO_SELFUPDATE knob exists" \
+    bash -c "grep -q 'OB_NO_SELFUPDATE' '$OB'"
+assert "42 the release URL is the asset itself (no API)" \
+    bash -c "grep -q 'releases/latest/download/ob-sync' '$OB'"
+assert "42 the offline notice names the outage in English too" \
+    bash -c "grep -q 'network unreachable; running the current version' '$OB'"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/).
 
+## [9.6.0] — The tool updates itself
+
+The last mile was manual: after a release, every device kept running
+whatever `ob-sync` file it had until the human remembered to re-run the
+installer. Now the tool refreshes itself.
+
+### Added
+
+- **Self-update on launch** — an interactive `ob-sync` checks the
+  latest GitHub release *before* anything else runs. A newer release is
+  downloaded, validated (shebang + `bash -n` + embedded `VERSION`) and
+  swapped in with one atomic same-filesystem `mv`, then the run
+  restarts on the new code. A kill at any instant leaves either the old
+  or the new tool — never a broken one.
+- **Bilingual offline notice** — no network is a normal state, not an
+  error: `اینترنت خاموشه — network unreachable` and the run continues
+  on the current version. The release asset itself is the only source
+  of truth (no GitHub API, no rate limits).
+- **`ob-sync update`** — the same check on demand, from scripts too.
+- **Update safety rails** — a copy inside a git checkout is never
+  overwritten (advisory instead); non-writable install locations print
+  the exact manual command; cron jobs, pipes and `--json` documents
+  stay silent and offline by design; `OB_NO_SELFUPDATE=1` disables the
+  feature (the test suites use it — section 42 covers the feature
+  hermetically through `file://` URLs, 33 new checks, zero network).
+
 ## [9.5.2] — Vaults on mounted drives are visible now
 
 Field report: a vault living on a second disk (`/media/<user>/shared/

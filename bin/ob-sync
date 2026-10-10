@@ -6,7 +6,7 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#   Version   : 9.5.2
+#   Version   : 9.6.0
 #   Author    : Soroush Chegini
 #   License   : MIT
 #   Repository: https://github.com/CheginiSoroush/obsidian-sync-scripts
@@ -34,6 +34,28 @@
 #       · One core          — platform differences live behind portability
 #                             helpers, never in forks of this script
 #       · Graceful failure  — errors report and return; nothing exits silently
+#
+#   RELEASE NOTES — 9.6.0 (the tool updates itself)
+#       · ob-sync now refreshes ITSELF: on an interactive launch the
+#         installed file is checked against the latest GitHub release
+#         BEFORE anything else runs; a newer release is downloaded,
+#         validated (shebang + bash -n + embedded VERSION) and swapped
+#         in with one atomic same-filesystem mv, then the run restarts
+#         on the new code. Even a kill mid-update leaves either the old
+#         or the new tool — never a broken one.
+#       · offline is a normal state, not an error: when the network is
+#         unreachable the tool says so in two languages (اینترنت
+#         خاموشه — network unreachable) and the run continues on the
+#         current version. No GitHub API is used, so there is no rate
+#         limit to hit — the release asset itself is the source of truth.
+#       · a copy inside a git checkout is NEVER overwritten (that would
+#         dirty the tree) — it gets an advisory naming the new version;
+#         non-writable install locations print the exact manual command.
+#       · automation stays silent and offline by design: the check runs
+#         only on an interactive TTY (or via the new `update` command);
+#         cron jobs and --json documents are never touched. The test
+#         suites export OB_NO_SELFUPDATE=1, and section 42 covers the
+#         feature hermetically through file:// URLs — zero network.
 #
 #   RELEASE NOTES — 9.5.2 (vaults on mounted drives are visible now)
 #       · discovery probes the standard mountpoints too — /media (also
@@ -451,7 +473,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 #  2. CONFIGURATION (every value can be overridden via environment)
 # ═════════════════════════════════════════════════════════════════════════════
 
-readonly VERSION="9.5.2"
+readonly VERSION="9.6.0"
 
 # ── Platform detection ──────────────────────────────────────────────────────
 # Termux exports TERMUX_VERSION in every session; desktop shells never do.
@@ -6694,6 +6716,9 @@ cmd_help() {
     cron [sub]            Scheduled syncs: status (default), install <sched>
                           [HH:MM], show, uninstall
     edit-conf             Edit the config file in \$EDITOR (starter created)
+    update                Check the latest GitHub release and self-update the
+                          installed tool (runs automatically on interactive
+                          launch; offline prints a notice and continues)
     menu                  Launch the interactive menu
     log [n]               Show the last n log entries (default: 20)
                           (add --json for a machine-readable document)
@@ -6785,6 +6810,149 @@ cmd_version() {
 }
 
 
+# ═════════════════════════════════════════════════════════════════════════
+#  14b. SELF-UPDATE (9.6.0)
+# ═════════════════════════════════════════════════════════════════════════
+
+# The installed tool refreshes itself from the latest GitHub release.
+# Design notes:
+#   · ONE source of truth: the release asset itself
+#     (releases/latest/download/ob-sync — no API, no rate limits).
+#   · The download is validated (shebang, bash syntax, embedded VERSION)
+#     before anything on disk is touched; the swap is an atomic
+#     same-filesystem mv, so even a mid-update kill leaves either the
+#     old or the new tool — never a broken one.
+#   · Offline is a normal state, not an error: curl exit 6/7/28 (DNS,
+#     refused, timeout) prints a bilingual notice and the run continues.
+#   · A copy inside a git checkout is NEVER overwritten (that would
+#     dirty the tree); it gets an advisory instead. ~/.local/bin style
+#     installs are replaced in place.
+#   · Automation stays silent and offline: the check only runs when
+#     stdout is a TTY (or OB_FORCE_UPDATE_CHECK=1 / the explicit
+#     `update` command). --json output is never polluted.
+#   · Knobs: OB_NO_SELFUPDATE=1 kills the feature (CI/tests),
+#     OB_UPDATE_URL overrides the release URL (tests use file://),
+#     OB_UPDATE_CONNECT_TIMEOUT (default 3) and OB_UPDATE_MAX_TIME
+#     (default 25) bound the curl calls.
+ob_self_update_check() {
+    # Once per process — the explicit `update` command re-enters through
+    # dispatch() and must not download twice.
+    [[ "${OB_SELFUPDATE_DONE:-0}" == "1" ]] && return 0
+    OB_SELFUPDATE_DONE=1
+
+    [[ "${OB_NO_SELFUPDATE:-0}" == "1" ]] && return 0
+
+    local cmd="${1:-}" force=0
+    case "$cmd" in update|self-update) force=1 ;; esac
+    if (( ! force )); then
+        # Cron, pipes and the suites stay silent AND offline; tests can
+        # force the interactive path with OB_FORCE_UPDATE_CHECK=1.
+        [[ "${OB_FORCE_UPDATE_CHECK:-0}" == "1" || -t 1 ]] || return 0
+    fi
+    # A --json run is a machine document — update chatter must never
+    # touch its stdout, so such runs skip the check entirely.
+    [[ " $* " == *" --json "* ]] && return 0
+
+    command -v curl >/dev/null 2>&1 || {
+        (( force )) && printf '[ob-sync] self-update needs curl — skipping\n' >&2
+        return 0
+    }
+
+    local tmp
+    tmp=$(mktemp "${TMPDIR:-/tmp}/ob-sync.update.XXXXXX") 2>/dev/null || return 0
+
+    local rc=0
+    curl -fsSL --connect-timeout "${OB_UPDATE_CONNECT_TIMEOUT:-3}" \
+         --max-time "${OB_UPDATE_MAX_TIME:-25}" \
+         -o "$tmp" \
+         "${OB_UPDATE_URL:-https://github.com/CheginiSoroush/obsidian-sync-scripts/releases/latest/download/ob-sync}" || rc=$?
+
+    if (( rc )); then
+        rm -f "$tmp"
+        case "$rc" in
+            6|7|28)
+                printf '[ob-sync] اینترنت خاموشه — network unreachable; running the current version (update check skipped)\n' >&2 ;;
+            *)
+                printf '[ob-sync] update check failed (curl rc=%s) — running the current version\n' "$rc" >&2 ;;
+        esac
+        return 0
+    fi
+
+    # Only a genuinely runnable ob-sync may replace the running one:
+    # shebang, full bash syntax, embedded VERSION constant.
+    local newver=""
+    if [[ "$(head -n 1 "$tmp")" == '#!'* ]] \
+       && bash -n "$tmp" 2>/dev/null \
+       && newver=$(grep -m1 '^readonly VERSION=' "$tmp" 2>/dev/null | sed 's/^readonly VERSION="\([^"]*\)".*/\1/') \
+       && [[ -n "$newver" ]]; then
+        :
+    else
+        rm -f "$tmp"
+        printf '[ob-sync] update check: the downloaded release is not a valid ob-sync script — keeping the current version\n' >&2
+        return 0
+    fi
+
+    # Strictly-newer gate: never downgrade, never "update" to the same
+    # version (a dev build carrying a higher VERSION wins either way).
+    local oldest
+    oldest=$(printf '%s\n%s\n' "$VERSION" "$newver" | sort -V | head -n 1)
+    if [[ "$oldest" != "$VERSION" || "$VERSION" == "$newver" ]]; then
+        rm -f "$tmp"
+        { (( force )) || [[ -t 1 ]]; } \
+            && printf '[ob-sync] v%s — up to date\n' "$VERSION" >&2
+        return 0
+    fi
+
+    local target dir staged
+    target=$(readlink -f -- "$0" 2>/dev/null) || target=$0
+    [[ -n "$target" ]] || target=$0
+    dir=$(dirname -- "$target")
+
+    # Never dirty a git checkout — the file belongs to the repository,
+    # the repository belongs to git pull / the apply scripts.
+    if command -v git >/dev/null 2>&1 \
+       && git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        rm -f "$tmp"
+        printf '[ob-sync] v%s is available — this copy belongs to a git checkout; update the repository (git pull) instead\n' "$newver" >&2
+        return 0
+    fi
+
+    if [[ ! -w "$dir" || ! -w "$target" ]]; then
+        rm -f "$tmp"
+        printf '[ob-sync] v%s is available — %s is not writable; update manually:\n' "$newver" "$target" >&2
+        printf '  curl -fsSL -o %q https://github.com/CheginiSoroush/obsidian-sync-scripts/releases/latest/download/ob-sync && chmod +x %q\n' "$target" "$target" >&2
+        return 0
+    fi
+
+    # Stage on the SAME filesystem, then one atomic mv: a kill at any
+    # instant leaves either the old or the new tool, never a truncated
+    # one. The staged file is validated above, so mv is the only
+    # remaining way this can fail — and it fails loud, keeping the old
+    # version.
+    staged=$(mktemp "$dir/.ob-sync.new.XXXXXX") 2>/dev/null || {
+        rm -f "$tmp"
+        printf '[ob-sync] update check: cannot stage the new version in %s — keeping the current one\n' "$dir" >&2
+        return 0
+    }
+    if ! cat -- "$tmp" > "$staged" || ! chmod 755 "$staged" || ! mv -f -- "$staged" "$target"; then
+        rm -f "$staged" "$tmp"
+        printf '[ob-sync] update check: install failed — keeping the current version\n' >&2
+        return 0
+    fi
+    rm -f "$tmp"
+
+    if (( force )); then
+        printf '[ob-sync] updated v%s → v%s — done\n' "$VERSION" "$newver" >&2
+        return 0
+    fi
+    # Launch path: hand control to the freshly installed code instead of
+    # running the rest of this process on an outdated copy.
+    printf '[ob-sync] updated v%s → v%s — restarting\n' "$VERSION" "$newver" >&2
+    export OB_NO_SELFUPDATE=1
+    exec "$target" "$@"
+}
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  15. DISPATCHER & ENTRY POINT
 # ═════════════════════════════════════════════════════════════════════════════
@@ -6863,6 +7031,7 @@ dispatch() {
         config)       cmd_config ;;
         cron)         cmd_cron "$@" ;;
         edit-conf)    cmd_edit_conf ;;
+        update|self-update) ob_self_update_check update ;;
         diff)         require_git && require_vault && cmd_diff ;;
         history)      require_git && require_vault && cmd_history "$@" ;;
 
@@ -6931,6 +7100,13 @@ main() {
     done
 
     init_colors
+    # Self-update on launch (9.6.0): an interactive run refreshes the
+    # installed tool from the latest release BEFORE it starts working;
+    # an offline machine gets a bilingual notice and continues with what
+    # it has. Runs once per process (sentinel inside) — the explicit
+    # `update` command re-enters through dispatch() without a second
+    # download, and the help/version short-circuits above stay instant.
+    ob_self_update_check "$@"
     # `log` reads the activity log itself: creating (init_log) or
     # stamping (the invoked row below) it here would answer a fresh
     # machine with ob-sync's own self-row instead of the documented
@@ -6978,7 +7154,7 @@ main() {
     # only opens a file — neither needs a resolved vault — so they skip
     # the sanity pass too.
     case "$cmd" in
-        help|version|doctor|cron|edit-conf) ;;
+        help|version|doctor|cron|edit-conf|update|self-update) ;;
         *) setup || return 1 ;;
     esac
 
